@@ -8,21 +8,21 @@ export function notConfigured(root: HTMLElement, title: string): boolean {
   return true;
 }
 
-export const pwHint = `(${MIN_PASSWORD}–${MAX_PASSWORD} Zeichen)`;
+export const pwHint = `${MIN_PASSWORD}–${MAX_PASSWORD} Zeichen`;
 
-export const newPasswordFields = (labelPrefix = 'Passwort'): HTMLLabelElement[] => [
+export const newPasswordFields = (labelPrefix = 'Passwort'): HTMLElement[] => [
   field({ name: 'p', label: labelPrefix, hint: pwHint, type: 'password', autocomplete: 'new-password', minlength: MIN_PASSWORD, maxlength: MAX_PASSWORD }),
   field({ name: 'p2', label: `${labelPrefix} wiederholen`, type: 'password', autocomplete: 'new-password', minlength: MIN_PASSWORD, maxlength: MAX_PASSWORD }),
 ];
 
-export const currentPasswordField = (label = 'Aktuelles Passwort', spec: Partial<FieldSpec> = {}): HTMLLabelElement =>
+export const currentPasswordField = (label = 'Aktuelles Passwort', spec: Partial<FieldSpec> = {}): HTMLElement =>
   field({ name: 'old', label, type: 'password', autocomplete: 'current-password', maxlength: MAX_PASSWORD, ...spec });
 
-export const usernameField = (forNew: boolean): HTMLLabelElement =>
+export const usernameField = (forNew: boolean): HTMLElement =>
   field({
     name: 'u',
     label: 'Benutzername',
-    hint: forNew ? '(3–20 Zeichen: a–z, 0–9, _)' : undefined,
+    hint: forNew ? '3–20 Zeichen: a–z, 0–9 und _' : undefined,
     autocomplete: 'username',
     maxlength: 20,
     pattern: forNew ? '[A-Za-z0-9_]{3,20}' : undefined,

@@ -1,6 +1,6 @@
 import { verifyRecoveryEmail } from '../../../sdk/src/index.ts';
 import { announce } from '../announce.ts';
-import { card, el, errorText, linkBtn, note, panel } from '../dom.ts';
+import { section, el, errorText, linkBtn, note, panel } from '../dom.ts';
 import { href, scrubParams, type Screen } from '../router.ts';
 import { notConfigured } from './common.ts';
 
@@ -13,7 +13,7 @@ export const verifyScreen: Screen = {
     const body = el('div', { className: 'stack' });
     panel(root, 'E-Mail bestätigen', body);
     const show = (title: string, text: string, kind: 'ok' | 'warn') => {
-      body.replaceChildren(card(title, note(text, kind), linkBtn('Zum Konto', href('konto'), true)));
+      body.replaceChildren(section(title, note(text, kind), linkBtn('Zum Konto', href('konto'), true)));
       announce(text);
     };
     if (!token) return show('Link unvollständig', 'Dieser Link enthält keinen gültigen Code.', 'warn');
