@@ -118,6 +118,15 @@ export const loginScreen: Screen = {
         orDivider(),
         googleButton('Mit Google registrieren', ret),
         note('Mit Google brauchst du kein Passwort. Den Benutzernamen wählst du nach der Anmeldung.'),
+        el(
+          'p',
+          { className: 'note' },
+          'Auch mit Google akzeptierst du die ',
+          el('a', { text: 'Nutzungsbedingungen', attrs: { href: href('nutzungsbedingungen') } }),
+          ' und hast die ',
+          el('a', { text: 'Datenschutzerklärung', attrs: { href: href('datenschutz') } }),
+          ' gelesen.',
+        ),
       );
 
       const defs: [string, HTMLElement][] = [
