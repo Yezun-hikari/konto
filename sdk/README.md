@@ -58,6 +58,8 @@ Der Client wird erst beim ersten Gebrauch erzeugt. Quelle der Konfiguration, in 
 2. `import.meta.env.VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` – nur wenn das Projekt mit **Vite** baut
    (Vite 8 ersetzt die Werte auch im vorgebauten Paket, in `vite build` und im Dev-Server). Andere Bundler
    ersetzen `import.meta.env` nicht; dann gilt das Paket als nicht konfiguriert → `configure()` verwenden.
+3. Auf **https://yezun.de** ohne 1. und 2.: die öffentlichen Standardwerte des gemeinsamen Projekts
+   (`YEZUN_DEFAULT_CONFIG`). Ein neues Projekt auf yezun.de braucht damit gar keine Konfiguration.
 
 Ohne Konfiguration ist `isConfigured()` `false` und jede Funktion wirft `AuthFailure('Online-Modus nicht konfiguriert')`.
 

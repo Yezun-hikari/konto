@@ -109,9 +109,23 @@ export function configure(opts: KontoConfig): void {
 }
 
 /** Creates the client on first use. Returns null when no configuration is available. */
+/**
+ * Public connection data of the shared Supabase project. Both values are public by design (they are part of every
+ * built page anyway); access is controlled by RLS and Edge Functions. Used on https://yezun.de when a site was built
+ * without VITE_SUPABASE_* and did not call configure(), so a new project needs no configuration at all.
+ */
+export const YEZUN_DEFAULT_CONFIG: KontoConfig = Object.freeze({
+  url: 'https://gxfjiypkfmgtzlrpyzjl.supabase.co',
+  anonKey: 'sb_publishable_xO1uacKp-qKEkWUQZzCZEA_WnpuXxlG',
+});
+
+function defaultConfig(): KontoConfig | null {
+  return typeof location !== 'undefined' && location.hostname === 'yezun.de' ? YEZUN_DEFAULT_CONFIG : null;
+}
+
 function init(): SupabaseClient | null {
   if (client) return client;
-  const cfg = config ?? envConfig();
+  const cfg = config ?? envConfig() ?? defaultConfig();
   if (!cfg) return null;
   const c = createClient(cfg.url, cfg.anonKey, { auth: { storageKey: storageKey(cfg) } });
   client = c;
