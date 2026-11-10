@@ -206,6 +206,9 @@ export async function dropDeadSession(): Promise<void> {
 const SYNTHETIC_SUFFIX = '@' + EMAIL_DOMAIN;
 
 /** Maps a supabase-js user to AuthUser. Exported for tests only. */
+/** Accounts registered in this tab whose token does not carry the email_verified claim yet. */
+const unverifiedIds = new Set<string>();
+
 export function toAuthUser(u: Session['user'] | null | undefined): AuthUser | null {
   if (!u) return null;
   const email = (u.email ?? '').toLowerCase();
@@ -221,7 +224,10 @@ export function toAuthUser(u: Session['user'] | null | undefined): AuthUser | nu
   const google = meta.provider === 'google' || providers.includes('google');
   const provider: AuthProvider = isGuest ? 'anonymous' : synthetic || !google ? 'password' : 'google';
   // only an explicit `false` blocks: legacy accounts / tokens issued before the claim existed stay usable
-  const emailVerified = !isGuest && (meta.email_verified !== false || meta.legacy === true);
+  // except right after register(): until a token with the claim arrives, the new account is unverified
+  if (meta.email_verified === true) unverifiedIds.delete(u.id);
+  const emailVerified =
+    !isGuest && !unverifiedIds.has(u.id) && (meta.email_verified !== false || meta.legacy === true);
   const status: AccountStatus = isGuest ? 'guest' : emailVerified ? 'active' : 'unverified';
   return { id: u.id, username, isGuest, provider, needsUsername: !isGuest && !username, emailVerified, status };
 }
@@ -305,7 +311,19 @@ export async function register(username: string, password: string, email: string
   }
   // updateUser does not always refresh the cached session's user; refresh so is_anonymous=false (and the
   // username claim) is visible
-  await refresh(c);
+  // A failed refresh (or a token without the claim) must not make the new account look active.
+  for (let i = 0; i < 2; i++) {
+    try {
+      await refresh(c);
+      break;
+    } catch {
+      /* retry once */
+    }
+  }
+  const fresh = session?.user;
+  if (fresh && (fresh.app_metadata as Record<string, unknown> | undefined)?.email_verified !== true) {
+    unverifiedIds.add(fresh.id);
+  }
   try {
     await setRecoveryEmail(password, e);
   } catch (err) {
@@ -682,6 +700,7 @@ export async function confirmPasswordReset(token: string, newPassword: string): 
 export async function verifyRecoveryEmail(token: string): Promise<void> {
   if (typeof token !== 'string' || !token.trim()) throw new AuthFailure(MSG.badLink);
   await invoke('recovery-email-verify', { token: token.trim() }, 'Bestätigung fehlgeschlagen. Bitte erneut versuchen.');
+  if (session?.user) unverifiedIds.delete(session.user.id);
   if (session && !toUser(session)?.isGuest) await refresh(getClient()).catch(() => {});
 }
 

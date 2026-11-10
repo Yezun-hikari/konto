@@ -131,9 +131,11 @@ begin
     end if;
   end if;
   if not coalesce(new.is_anonymous, false) then
-    if coalesce(v_meta -> 'providers', '[]'::jsonb) ? 'google'
+    -- Google verifies the address only for Google accounts (real address). A password account (synthetic address)
+    -- is verified solely by the recovery-email link; otherwise link+unlink of Google would bypass verification.
+    if not v_synthetic and (coalesce(v_meta -> 'providers', '[]'::jsonb) ? 'google'
        or v_meta ->> 'provider' = 'google'
-       or exists (select 1 from auth.identities i where i.user_id = new.id and i.provider = 'google') then
+       or exists (select 1 from auth.identities i where i.user_id = new.id and i.provider = 'google')) then
       v_meta := v_meta || '{"email_verified": true}'::jsonb;
     elsif v_synthetic and not v_meta ? 'email_verified' then
       v_meta := v_meta || '{"email_verified": false}'::jsonb;
@@ -189,6 +191,10 @@ begin
   perform pg_advisory_xact_lock(hashtext('konto-username:' || p_user_id::text));
   select u.is_anonymous into v_anon from auth.users u where u.id = p_user_id;
   if v_anon is null or v_anon then
+    return 'not_allowed';
+  end if;
+  -- only Google accounts pick a username here (password accounts get theirs from the synthetic address)
+  if not exists (select 1 from auth.identities i where i.user_id = p_user_id and i.provider = 'google') then
     return 'not_allowed';
   end if;
   if exists (select 1 from public.konto_usernames k where k.user_id = p_user_id) then

@@ -92,7 +92,6 @@ export declare const ready: Promise<void>;
  * If not, signs out locally so the next ensureSession() starts a fresh guest. Network errors keep the session.
  */
 export declare function dropDeadSession(): Promise<void>;
-/** Maps a supabase-js user to AuthUser. Exported for tests only. */
 export declare function toAuthUser(u: Session['user'] | null | undefined): AuthUser | null;
 export declare const currentUser: () => AuthUser | null;
 /** True when there is no account yet or the session is anonymous. */

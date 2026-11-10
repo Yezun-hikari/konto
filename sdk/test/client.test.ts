@@ -602,6 +602,14 @@ describe('email verification status', () => {
     expect(await sdk.login('alice', 'password1')).toMatchObject({ status: 'unverified', username: 'alice' });
   });
 
+  it('register() stays unverified when the refreshed token lacks the claim (guest upgrade)', async () => {
+    const sdk = await load(guest);
+    // GoTrue returns the pre-trigger user: no email_verified claim at all
+    fake.auth.updateUser.mockImplementationOnce(async () => ((fake.session = pw({})), { data: { user: {} }, error: null }));
+    expect(await sdk.register('alice', 'password1', 'a@example.org')).toMatchObject({ status: 'unverified' });
+    expect(sdk.currentUser()?.status).toBe('unverified');
+  });
+
   it('resendVerification uses the resend mode without password', async () => {
     const sdk = await load(pw({ email_verified: false }));
     await sdk.resendVerification();
