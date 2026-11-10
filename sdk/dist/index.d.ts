@@ -45,13 +45,6 @@ export interface RecoveryEmailStatus {
  * values is a no-op; different values after the client was created throw.
  */
 export declare function configure(opts: KontoConfig): void;
-/** Creates the client on first use. Returns null when no configuration is available. */
-/**
- * Public connection data of the shared Supabase project. Both values are public by design (they are part of every
- * built page anyway); access is controlled by RLS and Edge Functions. Used on https://yezun.de when a site was built
- * without VITE_SUPABASE_* and did not call configure(), so a new project needs no configuration at all.
- */
-export declare const YEZUN_DEFAULT_CONFIG: KontoConfig;
 export declare const isConfigured: () => boolean;
 /** The shared supabase-js client (for database reads, Realtime, Edge Functions). Throws if not configured. */
 export declare function getClient(): SupabaseClient;
