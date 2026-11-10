@@ -1,0 +1,40 @@
+{
+  "name": "@yezun/konto",
+  "version": "0.1.0",
+  "description": "Zentrales Konto für yezun.de: Client-SDK (@yezun/konto) und Konto-Webseite",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "repository": "github:Yezun-hikari/konto",
+  "main": "./sdk/dist/index.js",
+  "types": "./sdk/dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./sdk/dist/index.d.ts",
+      "import": "./sdk/dist/index.js",
+      "default": "./sdk/dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "sdk/dist",
+    "sdk/README.md"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && npm run build:sdk && vite build",
+    "build:sdk": "node -e \"require('fs').rmSync('sdk/dist',{recursive:true,force:true})\" && tsc -p sdk/tsconfig.build.json",
+    "check:sdk": "npm run build:sdk && git diff --exit-code --stat -- sdk/dist && test -z \"$(git status --porcelain -- sdk/dist)\"",
+    "preview": "vite preview",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.119.0"
+  }
+}

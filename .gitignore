@@ -1,0 +1,9 @@
+node_modules/
+# build output of the account page (deployed by .github/workflows/deploy.yml)
+/dist/
+.env
+.env.local
+.env.*.local
+*.tgz
+.DS_Store
+# NOTE: sdk/dist/ is committed on purpose (git dependency without build step). Never ignore it.
