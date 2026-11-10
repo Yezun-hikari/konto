@@ -71,3 +71,34 @@ Frontend-Agent besitzt `sdk/**` und `app/**`. Niemand committet, der Orchestrato
 - **Bestehende Passwort-Konten ohne bestätigte Recovery-E-Mail:** deutlicher, ruhiger Hinweis oben
   „Hinterlege eine E-Mail-Adresse, damit du dein Passwort zurücksetzen kannst“.
 - Gestaltung wie auf dem Branch `claude/konto-ui`, also ruhig, mit feinen Linien.
+
+## NACHTRAG: E-Mail muss bestätigt sein, bevor das Konto benutzt werden kann
+- Neuer Kontostatus im JWT: `app_metadata.email_verified` (boolean).
+  - `recovery-email-verify` setzt bei Erfolg per Admin-API `email_verified: true`. Danach muss der Client
+    `refreshSession()` aufrufen.
+  - Google-Konten bekommen `email_verified: true` automatisch. Das setzt der Trigger bzw. `set-username`,
+    weil Google die Adresse schon bestätigt hat.
+  - **Bestandskonten** (Passwort-Konten, die vor dieser Migration existieren) bekommen
+    `app_metadata.legacy: true` und `email_verified: true`. Sie werden nicht gesperrt, sehen aber den Hinweis,
+    eine E-Mail nachzutragen.
+  - Ein neu registriertes Passwort-Konto hat `email_verified: false`, bis der Link angeklickt wurde.
+  - Ändert jemand später seine Recovery-Adresse, bleibt `email_verified` true. Das Konto ist ja schon
+    bestätigt, nur die neue Adresse ist noch offen.
+- Serverseitig erzwingen:
+  - RLS der Handschrift-Tabellen verlangt zusätzlich `(auth.jwt()->'app_metadata'->>'email_verified')::boolean is true`.
+  - `set-username` und `password-change` verlangen ebenfalls ein bestätigtes Konto (403 `{error:'email_unverified'}`).
+  - `recovery-email-set`, `recovery-email-verify` und `delete-account` bleiben ohne Bestätigung erlaubt.
+    Damit kann man die Adresse korrigieren, den Link neu senden oder das Konto löschen.
+- SDK: `AuthUser.status: 'guest' | 'unverified' | 'active'`, dazu `emailVerified: boolean`.
+  - `isGuest` bleibt bestehen. Für Apps gilt: Nur `status === 'active'` ist ein nutzbares Konto.
+    Bei `unverified` behandeln Apps den Nutzer bei kontogebundenen Funktionen wie einen Gast und zeigen den
+    Hinweis „Bitte bestätige zuerst deine E-Mail-Adresse“ mit Link zur Konto-Seite.
+  - `register()` endet in `status 'unverified'`. `login()` mit einem unbestätigten Konto ist erlaubt, liefert
+    aber `status 'unverified'`.
+  - Neue Funktion `resendVerification()`: Sie sendet erneut an die hinterlegte, noch offene Adresse. Dafür
+    gibt es einen neuen Body-Modus von `recovery-email-set`, `{resend: true}`, der kein Passwort braucht,
+    aber die bestehenden Rate-Limits nutzt.
+- Konto-Seite: Ist `status === 'unverified'`, zeigt jede Route außer `#/verify-email` nur die Ansicht
+  „Bestätige deine E-Mail-Adresse“: maskierte Adresse, „Link erneut senden“, „Adresse ändern“ (mit
+  Passwort), „Abmelden“ und „Konto löschen“. Nach dem Klick auf den Link (`#/verify-email`) folgen
+  `refreshSession` und die Weiterleitung zum `return`-Ziel.

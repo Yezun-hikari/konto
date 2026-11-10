@@ -3,9 +3,11 @@
  * Successor of xox `src/auth/index.ts`: same behaviour, same German messages, same storage key.
  * Framework-free. See sdk/README.md.
  *
- * Accounts are username + password. The username is mapped to a synthetic email under a reserved
- * domain that can never receive mail. A real address can optionally be stored as *recovery email*
+ * Password accounts are username + password. The username is mapped to a synthetic email under a reserved
+ * domain that can never receive mail. Registration requires a real address, stored as *recovery email*
  * (kept server-side in its own table, never in auth.users) to allow a password reset.
+ * Google accounts sign in via OAuth (PKCE, redirect back to the account page) and pick a username afterwards;
+ * for every account the username is in the JWT under `app_metadata.username`.
  * Every function throws `AuthFailure` with a German, user-presentable message on failure.
  *
  * Configuration: `configure({ url, anonKey })` before first use, or – when this source is bundled by
@@ -13,19 +15,32 @@
  * on first use, so `configure()` only has to run before the first SDK call (top of the entry module).
  */
 import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
-import { AuthFailure, fail, functionErrorCode, functionFailure, MSG, NOT_CONFIGURED } from './errors.js';
-import { checkPassword, MIN_PASSWORD, normalizeRecoveryEmail, normalizeUsername, toEmail, USERNAME_RE } from './rules.js';
+import { AuthFailure, fail, functionErrorInfo, functionFailure, MSG, NOT_CONFIGURED } from './errors.js';
+import { checkPassword, EMAIL_DOMAIN, MIN_PASSWORD, normalizeRecoveryEmail, normalizeUsername, toEmail, USERNAME_RE } from './rules.js';
 import { buildAccountUrl, DEFAULT_ACCOUNT_URL, safeReturnUrl } from './return-url.js';
 
 export { AuthFailure, NOT_CONFIGURED, MIN_PASSWORD, USERNAME_RE, safeReturnUrl };
 export { MAX_PASSWORD } from './rules.js';
 
+export type AuthProvider = 'password' | 'google' | 'anonymous';
+
 export interface AuthUser {
   id: string;
-  /** null for guests (anonymous users). */
+  /** null for guests and for Google accounts that have not chosen a name yet. */
   username: string | null;
   isGuest: boolean;
+  /** How the account signs in. Guests are 'anonymous'. */
+  provider: AuthProvider;
+  /** True for a signed-in (non-guest) account without username: call setUsername(). */
+  needsUsername: boolean;
 }
+
+/** Result of handleOAuthReturn() after the redirect back from Google. */
+export type OAuthReturn =
+  | { status: 'signed_in'; user: AuthUser; mode: 'link' | 'signin' | 'reauth'; returnTo: string | null }
+  /** The guest could not be linked (Google account already exists): the browser is redirected to Google again. */
+  | { status: 'redirecting'; returnTo: string | null }
+  | { status: 'error'; message: string; returnTo: string | null };
 
 export interface KontoConfig {
   /** Supabase project URL (public). */
@@ -51,6 +66,27 @@ let client: SupabaseClient | null = null;
 let clientConfig: KontoConfig | null = null;
 let loaded: Promise<void> | null = null;
 let session: Session | null = null;
+
+/** OAuth callback parameters of the page load, captured before supabase-js rewrites the URL. */
+interface OAuthCallback {
+  error: string | null;
+  errorCode: string | null;
+  returnParam: string | null;
+}
+let callback: OAuthCallback | null = null;
+
+function captureCallback(): OAuthCallback | null {
+  if (typeof location === 'undefined') return null;
+  const q = new URLSearchParams(location.search);
+  // GoTrue may put redirect errors into the fragment ("#error=…&error_code=…"); app routes look like "#/…".
+  const rawHash = location.hash.replace(/^#/, '');
+  const h = rawHash.startsWith('/') ? new URLSearchParams() : new URLSearchParams(rawHash);
+  const get = (k: string): string | null => q.get(k) ?? h.get(k);
+  const error = get('error');
+  const errorCode = get('error_code');
+  if (!q.has('code') && !error && !errorCode) return null;
+  return { error, errorCode, returnParam: q.get('return') };
+}
 
 /**
  * Build-time config of a Vite build. Each access is a literal `import.meta.env.X`, so Vite replaces it
@@ -113,7 +149,10 @@ function init(): SupabaseClient | null {
   if (client) return client;
   const cfg = config ?? envConfig();
   if (!cfg) return null;
-  const c = createClient(cfg.url, cfg.anonKey, { auth: { storageKey: storageKey(cfg) } });
+  callback = captureCallback();
+  const c = createClient(cfg.url, cfg.anonKey, {
+    auth: { storageKey: storageKey(cfg), flowType: 'pkce', detectSessionInUrl: true },
+  });
   client = c;
   clientConfig = cfg;
   c.auth.onAuthStateChange((_e, s) => (session = s));
@@ -152,12 +191,27 @@ export async function dropDeadSession(): Promise<void> {
   if (error?.status && error.status >= 400 && error.status < 500) await c.auth.signOut({ scope: 'local' });
 }
 
-const toUser = (s: Session | null): AuthUser | null => {
-  const u = s?.user;
+const SYNTHETIC_SUFFIX = '@' + EMAIL_DOMAIN;
+
+/** Maps a supabase-js user to AuthUser. Exported for tests only. */
+export function toAuthUser(u: Session['user'] | null | undefined): AuthUser | null {
   if (!u) return null;
-  const isGuest = u.is_anonymous === true || !u.email;
-  return { id: u.id, isGuest, username: isGuest ? null : (u.email ?? '').split('@')[0] };
-};
+  const email = (u.email ?? '').toLowerCase();
+  const isGuest = u.is_anonymous === true || !email;
+  const meta = (u.app_metadata ?? {}) as { username?: unknown; provider?: unknown; providers?: unknown };
+  const synthetic = email.endsWith(SYNTHETIC_SUFFIX) ? email.slice(0, -SYNTHETIC_SUFFIX.length) : '';
+  let username: string | null = null;
+  if (!isGuest) {
+    if (typeof meta.username === 'string' && USERNAME_RE.test(meta.username)) username = meta.username;
+    else if (USERNAME_RE.test(synthetic)) username = synthetic;
+  }
+  const providers = Array.isArray(meta.providers) ? meta.providers : [];
+  const google = meta.provider === 'google' || providers.includes('google');
+  const provider: AuthProvider = isGuest ? 'anonymous' : synthetic || !google ? 'password' : 'google';
+  return { id: u.id, username, isGuest, provider, needsUsername: !isGuest && !username };
+}
+
+const toUser = (s: Session | null): AuthUser | null => toAuthUser(s?.user);
 
 export const currentUser = (): AuthUser | null => toUser(session);
 /** True when there is no account yet or the session is anonymous. */
@@ -190,26 +244,60 @@ export function ensureSession(): Promise<AuthUser> {
   return pending;
 }
 
+/** GoTrue reports exceptions of the auth.users trigger (`raise exception 'username_taken'`) as a database error. */
+function isUsernameTaken(e: { message?: string; code?: string; status?: number } | null | undefined): boolean {
+  if (!e) return false;
+  if (/username_taken/.test(`${e.code ?? ''} ${e.message ?? ''}`)) return true;
+  // the original exception text is not passed through; for synthetic emails the only trigger exception is username_taken
+  return (e.status ?? 0) >= 500 && /database error (saving new|updating) user/i.test(e.message ?? '');
+}
+
+/** Reloads the session (new JWT claims) and updates the cached one. */
+async function refresh(c: SupabaseClient): Promise<void> {
+  const { data } = await c.auth.refreshSession();
+  if (data?.session) session = data.session;
+}
+
 /**
- * Creates an account. A guest is upgraded in place (same user id, so ratings are kept);
- * without a session a fresh account is created.
+ * Creates a password account. `email` is required and is stored as recovery address (a confirmation link is sent).
+ * A guest is upgraded in place (same user id, so ratings are kept); without a session a fresh account is created.
+ * If only storing the email fails, the account exists anyway: the AuthFailure then has `accountCreated = true`.
  */
-export async function register(username: string, password: string): Promise<AuthUser> {
+export async function register(username: string, password: string, email: string): Promise<AuthUser> {
   const c = getClient();
+  let e: string;
+  try {
+    e = normalizeRecoveryEmail(typeof email === 'string' ? email : '');
+  } catch {
+    throw new AuthFailure('Bitte eine gültige E-Mail-Adresse angeben.');
+  }
   const u = normalizeUsername(username);
   checkPassword(password);
   await whenLoaded();
   const { data } = await c.auth.getSession();
   const s = data.session;
   if (s && !toUser(s)!.isGuest) throw new AuthFailure('Du bist bereits angemeldet.');
+  const taken = (err: Parameters<typeof fail>[0]) =>
+    isUsernameTaken(err) ? new AuthFailure(MSG.usernameTaken, { code: 'username_taken' }) : fail(err);
   if (s) {
     const { data: d, error } = await c.auth.updateUser({ email: toEmail(u), password });
-    if (error || !d.user) throw fail(error);
-    // updateUser does not always refresh the cached session's user; refresh so is_anonymous=false is visible
-    await c.auth.refreshSession();
+    if (error || !d.user) throw taken(error);
   } else {
-    const { error } = await c.auth.signUp({ email: toEmail(u), password });
-    if (error) throw fail(error);
+    const { data: d, error } = await c.auth.signUp({ email: toEmail(u), password });
+    if (error) throw taken(error);
+    if (d?.session) session = d.session;
+  }
+  // updateUser does not always refresh the cached session's user; refresh so is_anonymous=false (and the
+  // username claim) is visible
+  await refresh(c);
+  try {
+    await setRecoveryEmail(password, e);
+  } catch (err) {
+    const why = err instanceof AuthFailure ? err.message : MSG.unknown;
+    throw new AuthFailure(
+      `Konto erstellt, aber die E-Mail-Adresse konnte nicht gespeichert werden: ${why} Bitte unter Konto erneut eintragen.`,
+      { accountCreated: true, code: err instanceof AuthFailure ? err.code : undefined },
+    );
   }
   return currentUser()!;
 }
@@ -265,25 +353,210 @@ export async function changePassword(currentPassword: string, newPassword: strin
 
 /**
  * Permanently deletes the account and all its data (all sites sharing the project, recovery email included).
- * Registered users must confirm with their password (checked server-side); guests need none.
+ * - Guests: no argument.
+ * - Password accounts: the password (checked server-side).
+ * - Google accounts: `{ confirm: username }` (or the username as string). The sign-in must be fresh (at most
+ *   10 minutes old); otherwise the AuthFailure has `code = 'reauth_required'` → reauthWithGoogle().
  * Running matches count as lost.
  */
-export async function deleteAccount(password?: string): Promise<void> {
+export async function deleteAccount(passwordOrConfirm?: string | { confirm: string }): Promise<void> {
   const c = getClient();
   await whenLoaded();
   const me = currentUser();
   if (!me) return;
-  if (!me.isGuest && !password) throw new AuthFailure(MSG.wrongPassword);
-  // the server verifies the password; running matches are scored as a loss before deletion
-  const { error } = await c.functions.invoke('delete-account', { body: me.isGuest ? {} : { password } });
+  let body: Record<string, string> = {};
+  if (me.provider === 'google') {
+    const confirm = (typeof passwordOrConfirm === 'string' ? passwordOrConfirm : passwordOrConfirm?.confirm ?? '').trim().toLowerCase();
+    if (me.username) {
+      if (confirm !== me.username) throw new AuthFailure('Der Benutzername stimmt nicht überein.', { code: 'confirm_mismatch' });
+      body = { confirm };
+    }
+  } else if (!me.isGuest) {
+    const password = typeof passwordOrConfirm === 'string' ? passwordOrConfirm : '';
+    if (!password) throw new AuthFailure(MSG.wrongPassword);
+    body = { password };
+  }
+  // the server verifies password / confirmation; running matches are scored as a loss before deletion
+  const { error } = await c.functions.invoke('delete-account', { body });
   if (error) {
-    const code = await functionErrorCode(error);
-    if (code === null) throw new AuthFailure(MSG.network);
-    if (code === 'wrong_password') throw new AuthFailure(MSG.wrongPassword);
-    if (code === 'rate_limited') throw new AuthFailure(MSG.rateLimited);
-    throw new AuthFailure('Löschen fehlgeschlagen. Bitte erneut versuchen.');
+    const info = await functionErrorInfo(error);
+    if (info === null) throw new AuthFailure(MSG.network);
+    if (info.code === 'wrong_password') throw new AuthFailure(MSG.wrongPassword, { code: info.code });
+    if (info.code === 'rate_limited') throw new AuthFailure(MSG.rateLimited, { code: info.code });
+    if (info.code === 'reauth_required') throw new AuthFailure(info.message ?? MSG.reauthRequired, { code: info.code });
+    if (info.code === 'confirm_mismatch' || info.code === 'username_mismatch') {
+      throw new AuthFailure('Der Benutzername stimmt nicht überein.', { code: 'confirm_mismatch' });
+    }
+    throw new AuthFailure('Löschen fehlgeschlagen. Bitte erneut versuchen.', { code: info.code });
   }
   await c.auth.signOut({ scope: 'local' });
+}
+
+/**
+ * Chooses the username of a signed-in account that has none yet (Google accounts after the first sign-in).
+ * Edge Function `set-username`, then refreshSession() so `app_metadata.username` is in the JWT.
+ */
+export async function setUsername(username: string): Promise<AuthUser> {
+  const c = getClient();
+  const u = normalizeUsername(username);
+  await whenLoaded();
+  const me = currentUser();
+  if (!me || me.isGuest) throw new AuthFailure(MSG.notSignedIn);
+  if (me.username) throw new AuthFailure('Für dieses Konto ist bereits ein Benutzername festgelegt.');
+  await invoke('set-username', { username: u }, 'Speichern fehlgeschlagen. Bitte erneut versuchen.', {
+    username_taken: MSG.usernameTaken,
+  });
+  await refresh(c);
+  return currentUser()!;
+}
+
+// ---------- Google (OAuth, PKCE redirect to the account page) ----------
+
+type OAuthMode = 'link' | 'signin' | 'reauth';
+interface PendingOAuth {
+  mode: OAuthMode;
+  /** Guest to delete after a successful sign-in to a different account (like login()). Never logged. */
+  guestId?: string;
+  guestToken?: string;
+  at: number;
+}
+
+const pendingKey = (): string => (clientConfig ? storageKey(clientConfig) : STORAGE_KEY) + '-oauth';
+const PENDING_TTL = 30 * 60 * 1000;
+
+function savePending(p: Omit<PendingOAuth, 'at'>): void {
+  try {
+    sessionStorage.setItem(pendingKey(), JSON.stringify({ ...p, at: Date.now() }));
+  } catch {
+    /* no sessionStorage: the guest is simply not cleaned up */
+  }
+}
+
+function takePending(): PendingOAuth | null {
+  try {
+    const raw = sessionStorage.getItem(pendingKey());
+    sessionStorage.removeItem(pendingKey());
+    const p = raw ? (JSON.parse(raw) as PendingOAuth) : null;
+    if (!p || typeof p.at !== 'number' || Date.now() - p.at > PENDING_TTL) return null;
+    if (p.mode !== 'link' && p.mode !== 'signin' && p.mode !== 'reauth') return null;
+    return p;
+  } catch {
+    return null;
+  }
+}
+
+/** `https://yezun.de/konto/?return=<safe>` – query, not hash, so GoTrue can append `code`. */
+function oauthRedirect(returnTo: string | null | undefined): string {
+  const base = new URL(accountBase().split('#')[0], currentHref());
+  base.search = '';
+  const safe = safeReturnUrl(returnTo, currentOrigin());
+  if (safe) base.searchParams.set('return', safe);
+  return base.href;
+}
+
+const isTransient = (e: { status?: number; name?: string; code?: string } | null | undefined): boolean =>
+  !!e && (e.status === 429 || e.code === 'over_request_rate_limit' || e.name === 'AuthRetryableFetchError' || e.status === 0);
+
+/** signInWithOAuth; a current guest is remembered so handleOAuthReturn() can delete it afterwards. */
+async function oauthSignIn(c: SupabaseClient, returnTo: string | null | undefined, mode: 'signin' | 'reauth', guest: Session | null): Promise<void> {
+  const g = guest && toUser(guest)!.isGuest ? guest : null;
+  savePending(g ? { mode, guestId: g.user.id, guestToken: g.access_token } : { mode });
+  const { error } = await c.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: oauthRedirect(returnTo) } });
+  if (error) {
+    takePending();
+    throw fail(error, MSG.googleFailed);
+  }
+}
+
+/**
+ * Signs in with Google (redirects the browser to Google, back to the account page with `?code`; the account page
+ * calls handleOAuthReturn()). A current guest is linked to the Google identity (same user id: rating and data are
+ * kept). If the Google identity already belongs to another account, or there is no session, it signs in normally;
+ * the abandoned guest is then deleted after the redirect, like login() does.
+ */
+export async function signInWithGoogle(returnTo?: string | null): Promise<void> {
+  const c = getClient();
+  await whenLoaded();
+  const s = (await c.auth.getSession()).data.session;
+  const me = toUser(s);
+  if (me && !me.isGuest) throw new AuthFailure('Du bist bereits angemeldet.');
+  if (s && me?.isGuest) {
+    savePending({ mode: 'link' });
+    const { error } = await c.auth.linkIdentity({ provider: 'google', options: { redirectTo: oauthRedirect(returnTo) } });
+    if (!error) return;
+    takePending();
+    if (isTransient(error)) throw fail(error, MSG.googleFailed);
+    // e.g. identity_already_exists / manual_linking_disabled: sign in to the Google account instead
+  }
+  await oauthSignIn(c, returnTo, 'signin', s);
+}
+
+/** Fresh Google sign-in of the current Google account (needed by deleteAccount() after 10 minutes). */
+export async function reauthWithGoogle(returnTo?: string | null): Promise<void> {
+  const c = getClient();
+  await whenLoaded();
+  if (currentUser()?.provider !== 'google') throw new AuthFailure('Nur für Google-Konten möglich.');
+  await oauthSignIn(c, returnTo, 'reauth', null);
+}
+
+/** True when this page load is the redirect back from an OAuth provider (`?code=…` or an OAuth error). */
+export function isOAuthReturn(): boolean {
+  init();
+  return callback !== null;
+}
+
+function oauthErrorMessage(cb: OAuthCallback): string {
+  switch (cb.errorCode ?? cb.error) {
+    case 'access_denied':
+      return 'Die Anmeldung mit Google wurde abgebrochen.';
+    case 'identity_already_exists':
+      return 'Dieses Google-Konto gehört bereits zu einem anderen Konto.';
+    case 'signup_disabled':
+    case 'provider_disabled':
+      return 'Anmeldung ist derzeit deaktiviert.';
+    case 'flow_state_expired':
+    case 'flow_state_not_found':
+    case 'bad_code_verifier':
+      return 'Die Anmeldung ist abgelaufen. Bitte erneut versuchen.';
+  }
+  return MSG.googleFailed;
+}
+
+/**
+ * Finishes an OAuth redirect (call once on the account page, after isOAuthReturn()). supabase-js has already
+ * exchanged `?code` for a session; this deletes an abandoned guest, falls back from a failed guest link to a normal
+ * Google sign-in (another redirect), and reports the outcome. Returns null when the page load was no OAuth return.
+ * It does not touch the URL: the caller removes `code` / `error*` / `return`.
+ */
+export async function handleOAuthReturn(): Promise<OAuthReturn | null> {
+  const c = getClient();
+  await whenLoaded();
+  const cb = callback;
+  if (!cb) return null;
+  callback = null;
+  const pending = takePending();
+  const returnTo = safeReturnUrl(cb.returnParam, currentOrigin());
+  if (cb.error || cb.errorCode) {
+    if (cb.errorCode === 'identity_already_exists' && pending?.mode === 'link') {
+      // the Google identity already has an account: sign in to it; the guest is deleted afterwards
+      const s = (await c.auth.getSession()).data.session;
+      try {
+        await oauthSignIn(c, returnTo, 'signin', s);
+      } catch (e) {
+        return { status: 'error', message: e instanceof AuthFailure ? e.message : MSG.googleFailed, returnTo };
+      }
+      return { status: 'redirecting', returnTo };
+    }
+    return { status: 'error', message: oauthErrorMessage(cb), returnTo };
+  }
+  const me = currentUser();
+  if (!me || me.isGuest) return { status: 'error', message: MSG.googleFailed, returnTo };
+  if (pending?.guestToken && pending.guestId !== me.id) {
+    c.functions
+      .invoke('delete-account', { body: {}, headers: { Authorization: `Bearer ${pending.guestToken}` } })
+      .catch(() => {});
+  }
+  return { status: 'signed_in', user: me, mode: pending?.mode ?? 'signin', returnTo };
 }
 
 // ---------- Account page links ----------
@@ -315,7 +588,8 @@ async function invoke<T>(fn: string, body: Record<string, unknown>, fallback: st
 }
 
 function requireAccount(): void {
-  if (!currentUser()?.username) throw new AuthFailure(MSG.notSignedIn);
+  const me = currentUser();
+  if (!me || me.isGuest) throw new AuthFailure(MSG.notSignedIn);
 }
 
 /**
