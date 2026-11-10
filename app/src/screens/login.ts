@@ -1,14 +1,8 @@
 import { AuthFailure, currentUser, login, logout, onAuthChange, ready, register } from '../../../sdk/src/index.ts';
 import { announce } from '../announce.ts';
-import { section, el, form, linkBtn, note, panel, returnTarget, shortUrl } from '../dom.ts';
+import { section, el, form, linkBtn, note, panel, returnTarget, setFlash, shortUrl } from '../dom.ts';
 import { href, navigate, type Screen } from '../router.ts';
-import { currentPasswordField, newPasswordFields, notConfigured, usernameField } from './common.ts';
-
-/** After a successful login/register: back to the validated `return` target, else the account page. */
-function done(ret: string | null): void {
-  if (ret) location.assign(ret);
-  else navigate('konto');
-}
+import { currentPasswordField, done, emailField, googleButton, newPasswordFields, notConfigured, orDivider, usernameField } from './common.ts';
 
 export const loginScreen: Screen = {
   title: 'Anmelden',
@@ -30,9 +24,17 @@ export const loginScreen: Screen = {
 
       if (user && !user.isGuest) {
         heading.textContent = 'Angemeldet';
-        const c = section('Du bist angemeldet', el('p', { text: `Angemeldet als ${user.username}.` }));
+        const c = section(
+          'Du bist angemeldet',
+          el('p', {
+            text: user.needsUsername
+              ? 'Angemeldet mit Google. Du hast noch keinen Benutzernamen.'
+              : `Angemeldet${user.provider === 'google' ? ' mit Google' : ''} als ${user.username}.`,
+          }),
+        );
         const actions = el('div', { className: 'actions' });
-        if (ret) actions.append(linkBtn(`Weiter zu ${shortUrl(ret)}`, ret, true));
+        if (user.needsUsername) actions.append(linkBtn('Benutzernamen wählen', href('benutzername', { return: ret }), true));
+        else if (ret) actions.append(linkBtn(`Weiter zu ${shortUrl(ret)}`, ret, true));
         actions.append(linkBtn('Zum Konto', href('konto', { return: ret })));
         const out = el('button', { className: 'btn', text: 'Abmelden', attrs: { type: 'button' } });
         out.addEventListener('click', async () => {
@@ -66,6 +68,8 @@ export const loginScreen: Screen = {
           done(ret);
         }),
         el('p', { className: 'small' }, el('a', { text: 'Passwort vergessen?', attrs: { href: href('reset-request', { return: ret }) } })),
+        orDivider(),
+        googleButton('Mit Google anmelden', ret),
       );
 
       const regPanel = el('div', { className: 'tabpanel' });
@@ -75,17 +79,36 @@ export const loginScreen: Screen = {
             ? 'Dein Gast-Fortschritt (z. B. Wertung und Spitzname) wird in das neue Konto übernommen.'
             : 'Mit einem Konto meldest du dich auf allen Seiten von yezun.de und auf anderen Geräten an.',
         ),
-        note(
-          'Wichtig: Ohne hinterlegte und bestätigte Wiederherstellungs-E-Mail kann ein vergessenes Passwort nicht zurückgesetzt werden. ' +
-            'Du kannst die E-Mail nach der Registrierung unter „Konto“ hinterlegen.',
-          'warn',
+        form(
+          [
+            emailField(),
+            usernameField(true),
+            ...newPasswordFields(),
+            note(
+              'Wir schicken dir einen Bestätigungslink an diese Adresse. Dein Konto kannst du nutzen, sobald du ihn geöffnet hast. ' +
+                'Mit der Adresse kannst du ein vergessenes Passwort zurücksetzen; sie ist für niemanden sichtbar.',
+            ),
+          ],
+          'Konto erstellen',
+          async (f) => {
+            if (f.p !== f.p2) throw new AuthFailure('Die Passwörter stimmen nicht überein.');
+            try {
+              await register(f.u, f.p, f.email);
+            } catch (e) {
+              if (!(e instanceof AuthFailure && e.accountCreated)) throw e;
+              setFlash(e.message, 'warn'); // the account exists: continue on the account page
+              announce('Konto erstellt.');
+              navigate('konto', { return: ret });
+              return;
+            }
+            setFlash(`Konto erstellt. Wir haben dir einen Bestätigungslink an ${f.email.trim()} geschickt.`, 'ok');
+            announce('Konto erstellt.');
+            navigate('konto', { return: ret });
+          },
         ),
-        form([usernameField(true), ...newPasswordFields()], 'Konto erstellen', async (f) => {
-          if (f.p !== f.p2) throw new AuthFailure('Die Passwörter stimmen nicht überein.');
-          await register(f.u, f.p);
-          announce('Konto erstellt.');
-          done(ret);
-        }),
+        orDivider(),
+        googleButton('Mit Google registrieren', ret),
+        note('Mit Google brauchst du kein Passwort. Den Benutzernamen wählst du nach der Anmeldung.'),
       );
 
       const defs: [string, HTMLElement][] = [

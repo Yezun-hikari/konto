@@ -80,6 +80,9 @@ const FUNCTION_MESSAGES: Record<string, string> = {
   reauth_required: MSG.reauthRequired,
   confirm_mismatch: 'Der Benutzername stimmt nicht überein.',
   not_password_account: 'Nur für Konten mit Passwort möglich.',
+  email_unverified: 'Bitte bestätige zuerst deine E-Mail-Adresse.',
+  nothing_pending: 'Es ist keine unbestätigte E-Mail-Adresse hinterlegt.',
+  no_pending_email: 'Es ist keine unbestätigte E-Mail-Adresse hinterlegt.',
 };
 
 export interface FunctionErrorInfo {

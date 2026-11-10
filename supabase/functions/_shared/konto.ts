@@ -127,3 +127,79 @@ export function resetMail(username: string, token: string): Mail {
     ],
   );
 }
+
+/** The parts of a GoTrue user the account helpers look at (structurally compatible with supabase-js `User`). */
+export interface AccountLike {
+  is_anonymous?: boolean;
+  email?: string | null;
+  identities?: { provider: string }[] | null;
+  app_metadata?: Record<string, unknown> | null;
+}
+
+/**
+ * - 'anonymous': guest.
+ * - 'password': has an email identity (username + password). The synthetic address counts as well, in case the
+ *   identities are missing from the user object.
+ * - 'google': registered, no password, signs in with Google.
+ * - 'other': registered, neither (e.g. the bot); treated like a password-less account.
+ */
+export type AccountKind = 'anonymous' | 'password' | 'google' | 'other';
+
+export function accountKind(user: AccountLike): AccountKind {
+  if (user.is_anonymous) return 'anonymous';
+  const providers = (user.identities ?? []).map((i) => i.provider);
+  if (providers.includes('email') || usernameFromEmail(user.email)) return 'password';
+  if (providers.includes('google')) return 'google';
+  return 'other';
+}
+
+/** app_metadata.username (set by the database for every registered account), or null. */
+export function accountUsername(user: AccountLike): string | null {
+  const u = user.app_metadata?.username;
+  return typeof u === 'string' && USERNAME_RE.test(u) ? u : usernameFromEmail(user.email);
+}
+
+/** True when the account has a confirmed email (app_metadata.email_verified, see the email_verified migration). */
+export function isEmailVerified(user: AccountLike): boolean {
+  return user.app_metadata?.email_verified === true;
+}
+
+/** Payload of a JWT (signature NOT checked: only for tokens already verified elsewhere), or null. */
+export function jwtClaims(jwt: string): Record<string, unknown> | null {
+  try {
+    const part = jwt.split('.')[1] ?? '';
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(part.length / 4) * 4, '=');
+    const claims = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
+    return typeof claims === 'object' && claims !== null && !Array.isArray(claims) ? claims : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Maximum age of the sign-in for operations without a password (delete-account of Google accounts). */
+export const FRESH_LOGIN_SECONDS = 10 * 60;
+
+/**
+ * Whether the sign-in behind these access-token claims is at most maxAge seconds old. Both must hold:
+ * - `iat` (issue time of this token) is recent;
+ * - the newest `amr[].timestamp` (time of the actual sign-in; GoTrue keeps it across token refreshes, unlike
+ *   `iat`) is recent, if the token carries `amr`.
+ * Up to 60 s clock skew into the future is tolerated.
+ */
+export function isFreshLogin(
+  claims: Record<string, unknown> | null,
+  nowSeconds: number,
+  maxAge = FRESH_LOGIN_SECONDS,
+): boolean {
+  if (!claims) return false;
+  const recent = (t: unknown) =>
+    typeof t === 'number' && Number.isFinite(t) && t >= nowSeconds - maxAge && t <= nowSeconds + 60;
+  if (!recent(claims.iat)) return false;
+  if (Array.isArray(claims.amr)) {
+    const times = claims.amr
+      .map((a) => (typeof a === 'object' && a !== null ? (a as { timestamp?: unknown }).timestamp : undefined))
+      .filter((t): t is number => typeof t === 'number' && Number.isFinite(t));
+    if (times.length && !recent(Math.max(...times))) return false;
+  }
+  return true;
+}

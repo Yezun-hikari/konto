@@ -90,7 +90,9 @@ describe('configuration', () => {
     expect(createClient).toHaveBeenCalledWith('https://p.supabase.co', 'anon', {
       auth: { storageKey: 'yezun-games-auth', flowType: 'pkce', detectSessionInUrl: true },
     });
-    expect(sdk.currentUser()).toEqual({ id: 'u1', username: 'alice', isGuest: false, provider: 'password', needsUsername: false });
+    expect(sdk.currentUser()).toEqual({
+      id: 'u1', username: 'alice', isGuest: false, provider: 'password', needsUsername: false, emailVerified: true, status: 'active',
+    });
   });
 
   it('uses ?authslot only when allowed', async () => {
@@ -354,13 +356,15 @@ describe('AuthUser mapping', () => {
   it('derives username, provider and needsUsername', async () => {
     const sdk = await load(null);
     expect(sdk.toAuthUser(null)).toBeNull();
-    expect(sdk.toAuthUser(guest.user as never)).toEqual({ id: 'g1', username: null, isGuest: true, provider: 'anonymous', needsUsername: false });
+    expect(sdk.toAuthUser(guest.user as never)).toEqual({
+      id: 'g1', username: null, isGuest: true, provider: 'anonymous', needsUsername: false, emailVerified: false, status: 'guest',
+    });
     expect(sdk.toAuthUser(registered.user as never)).toMatchObject({ username: 'alice', provider: 'password', needsUsername: false });
     // app_metadata.username wins over the synthetic email
     expect(sdk.toAuthUser({ ...registered.user, app_metadata: { username: 'alice2' } } as never)?.username).toBe('alice2');
     // invalid claim → synthetic email
     expect(sdk.toAuthUser({ ...registered.user, app_metadata: { username: 'Bad Name' } } as never)?.username).toBe('alice');
-    expect(sdk.toAuthUser(googleUser().user as never)).toEqual({ id: 'u2', username: null, isGuest: false, provider: 'google', needsUsername: true });
+    expect(sdk.toAuthUser(googleUser().user as never)).toMatchObject({ id: 'u2', username: null, isGuest: false, provider: 'google', needsUsername: true });
     expect(sdk.toAuthUser(googleUser('carol').user as never)).toMatchObject({ username: 'carol', provider: 'google', needsUsername: false });
     // a linked former guest: provider 'anonymous', providers include google
     const linked = { id: 'g1', email: 'x@gmail.example', is_anonymous: false, app_metadata: { provider: 'anonymous', providers: ['anonymous', 'google'] } };
@@ -574,5 +578,55 @@ describe('deleteAccount (Google)', () => {
     const sdk = await load(guest);
     await sdk.deleteAccount();
     expect(fake.functions.invoke).toHaveBeenLastCalledWith('delete-account', { body: {} });
+  });
+});
+
+describe('email verification status', () => {
+  const pw = (meta: Record<string, unknown>) => ({ ...registered, user: { ...registered.user, app_metadata: { username: 'alice', ...meta } } });
+
+  it('maps app_metadata.email_verified / legacy to status', async () => {
+    const sdk = await load(null);
+    expect(sdk.toAuthUser(pw({ email_verified: false }).user as never)).toMatchObject({ status: 'unverified', emailVerified: false, isGuest: false });
+    expect(sdk.toAuthUser(pw({ email_verified: true }).user as never)).toMatchObject({ status: 'active', emailVerified: true });
+    expect(sdk.toAuthUser(pw({ email_verified: false, legacy: true }).user as never)).toMatchObject({ status: 'active' });
+    expect(sdk.toAuthUser(pw({}).user as never)).toMatchObject({ status: 'active' }); // token from before the claim
+    expect(sdk.toAuthUser(googleUser('carol').user as never)).toMatchObject({ status: 'active' });
+  });
+
+  it('register() ends unverified, login() of an unverified account is allowed', async () => {
+    let sdk = await load(guest);
+    fake.auth.updateUser.mockImplementationOnce(async () => ((fake.session = pw({ email_verified: false })), { data: { user: {} }, error: null }));
+    expect(await sdk.register('alice', 'password1', 'a@example.org')).toMatchObject({ status: 'unverified', username: 'alice' });
+    sdk = await load(null);
+    fake.auth.signInWithPassword.mockResolvedValueOnce({ data: { session: pw({ email_verified: false }) }, error: null });
+    expect(await sdk.login('alice', 'password1')).toMatchObject({ status: 'unverified', username: 'alice' });
+  });
+
+  it('resendVerification uses the resend mode without password', async () => {
+    const sdk = await load(pw({ email_verified: false }));
+    await sdk.resendVerification();
+    expect(fake.functions.invoke).toHaveBeenLastCalledWith('recovery-email-set', { body: { resend: true } });
+    fake.functions.invoke.mockResolvedValueOnce({ data: null, error: httpError({ error: 'rate_limited' }, 429) });
+    await expect(sdk.resendVerification()).rejects.toThrow('Zu viele Versuche. Bitte später erneut.');
+    const g = await load(guest);
+    await expect(g.resendVerification()).rejects.toThrow('Nicht angemeldet.');
+  });
+
+  it('verifyRecoveryEmail refreshes the session of a signed-in account', async () => {
+    const sdk = await load(pw({ email_verified: false }));
+    expect(sdk.currentUser()?.status).toBe('unverified');
+    fake.auth.refreshSession.mockImplementationOnce(async () => ({ data: { session: pw({ email_verified: true }) }, error: null }));
+    await sdk.verifyRecoveryEmail('tok');
+    expect(fake.auth.refreshSession).toHaveBeenCalledTimes(1);
+    expect(sdk.currentUser()?.status).toBe('active');
+    const anon = await load(null);
+    await anon.verifyRecoveryEmail('tok');
+    expect(fake.auth.refreshSession).not.toHaveBeenCalled();
+  });
+
+  it('refreshUser reloads the user', async () => {
+    const sdk = await load(pw({ email_verified: false }));
+    fake.auth.refreshSession.mockImplementationOnce(async () => ({ data: { session: pw({ email_verified: true }) }, error: null }));
+    expect(await sdk.refreshUser()).toMatchObject({ status: 'active' });
   });
 });

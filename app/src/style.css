@@ -361,6 +361,59 @@ main {
   justify-content: flex-end;
 }
 
+/* "Mit Google …": plain outlined button, the small G mark is the only colour. */
+.btn.google {
+  justify-self: start;
+  gap: 10px;
+  padding: 0 18px;
+  border: 1px solid var(--input-line);
+  border-radius: var(--radius);
+  background: var(--field);
+  color: var(--text);
+  text-decoration: none;
+}
+.btn.google:hover {
+  border-color: var(--muted);
+}
+.btn.google svg {
+  flex: none;
+}
+.oauth {
+  display: grid;
+  gap: 10px;
+}
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+
+/* Calm notice at the top of the account page. */
+.callout {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--warn);
+  border-radius: var(--radius);
+}
+.callout p {
+  color: var(--muted);
+}
+.callout .link-btn {
+  justify-self: start;
+  padding: 4px 0 0;
+  color: var(--accent);
+}
+
 /* ---------- Tabs (login / register) ---------- */
 .tabs {
   display: flex;
@@ -438,7 +491,8 @@ main {
     padding-top: 28px;
   }
   .form > .btn.primary,
-  .form > .btn.danger {
+  .form > .btn.danger,
+  .btn.google {
     justify-self: stretch;
   }
 }

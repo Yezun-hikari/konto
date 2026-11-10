@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  accountKind,
+  accountUsername,
   base64url,
+  isEmailVerified,
+  isFreshLogin,
+  jwtClaims,
   escapeHtml,
   normalizeEmail,
   normalizeUsername,
@@ -75,5 +80,62 @@ describe('mails', () => {
     expect(r.subject).toBe('Passwort zurücksetzen');
     expect(r.text).toContain(`https://yezun.de/konto/#/reset?token=${token}`);
     expect(r.text).toContain('1 Stunde');
+  });
+});
+
+describe('accountKind', () => {
+  it('distinguishes guests, password, Google and other accounts', () => {
+    expect(accountKind({ is_anonymous: true, identities: [{ provider: 'google' }] })).toBe('anonymous');
+    expect(accountKind({ email: 'max@users.yezun-games.invalid', identities: [{ provider: 'email' }] })).toBe('password');
+    expect(accountKind({ email: 'max@users.yezun-games.invalid' })).toBe('password');
+    expect(accountKind({ email: 'max@users.yezun-games.invalid', identities: [{ provider: 'email' }, { provider: 'google' }] }))
+      .toBe('password');
+    expect(accountKind({ email: 'max@gmail.com', identities: [{ provider: 'google' }] })).toBe('google');
+    expect(accountKind({ email: 'max@gmail.com', identities: null })).toBe('other');
+  });
+});
+
+describe('accountUsername / isEmailVerified', () => {
+  it('prefers app_metadata.username and falls back to the synthetic address', () => {
+    expect(accountUsername({ app_metadata: { username: 'anna' }, email: 'x@gmail.com' })).toBe('anna');
+    expect(accountUsername({ app_metadata: {}, email: 'max@users.yezun-games.invalid' })).toBe('max');
+    expect(accountUsername({ app_metadata: { username: 'Bad Name' }, email: 'x@gmail.com' })).toBeNull();
+  });
+  it('needs email_verified === true', () => {
+    expect(isEmailVerified({ app_metadata: { email_verified: true } })).toBe(true);
+    expect(isEmailVerified({ app_metadata: { email_verified: 'true' } })).toBe(false);
+    expect(isEmailVerified({ app_metadata: null })).toBe(false);
+  });
+});
+
+const jwt = (claims: unknown) =>
+  `x.${base64url(new TextEncoder().encode(JSON.stringify(claims)))}.sig`;
+
+describe('jwtClaims', () => {
+  it('decodes the payload, null for garbage', () => {
+    expect(jwtClaims(jwt({ sub: 'a', iat: 5, name: 'Jörg' }))).toEqual({ sub: 'a', iat: 5, name: 'Jörg' });
+    expect(jwtClaims('nope')).toBeNull();
+    expect(jwtClaims(jwt([1, 2]))).toBeNull();
+  });
+});
+
+describe('isFreshLogin', () => {
+  const now = 1_800_000_000;
+  it('accepts a token issued and signed in within 10 minutes', () => {
+    expect(isFreshLogin({ iat: now - 60, amr: [{ method: 'oauth', timestamp: now - 60 }] }, now)).toBe(true);
+    expect(isFreshLogin({ iat: now - 600 }, now)).toBe(true);
+    expect(isFreshLogin({ iat: now + 30 }, now)).toBe(true);
+  });
+  it('rejects old tokens, refreshed tokens of an old sign-in and missing claims', () => {
+    expect(isFreshLogin({ iat: now - 601 }, now)).toBe(false);
+    expect(isFreshLogin({ iat: now - 10, amr: [{ method: 'oauth', timestamp: now - 3600 }] }, now)).toBe(false);
+    expect(isFreshLogin({ iat: now + 120 }, now)).toBe(false);
+    expect(isFreshLogin({ iat: '1' }, now)).toBe(false);
+    expect(isFreshLogin({}, now)).toBe(false);
+    expect(isFreshLogin(null, now)).toBe(false);
+  });
+  it('uses the newest amr entry', () => {
+    const amr = [{ method: 'password', timestamp: now - 9999 }, { method: 'oauth', timestamp: now - 5 }];
+    expect(isFreshLogin({ iat: now - 5, amr }, now)).toBe(true);
   });
 });

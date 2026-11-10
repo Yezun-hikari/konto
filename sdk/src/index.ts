@@ -33,7 +33,19 @@ export interface AuthUser {
   provider: AuthProvider;
   /** True for a signed-in (non-guest) account without username: call setUsername(). */
   needsUsername: boolean;
+  /**
+   * The account's email is confirmed (`app_metadata.email_verified`). Accounts without the claim (created before
+   * it existed) count as confirmed. Always false for guests.
+   */
+  emailVerified: boolean;
+  /**
+   * 'active' is the only usable account. 'unverified' (registered, email link not clicked yet) must be treated like
+   * a guest by account-bound features, with a hint "Bitte bestätige zuerst deine E-Mail-Adresse" + accountUrl().
+   */
+  status: AccountStatus;
 }
+
+export type AccountStatus = 'guest' | 'unverified' | 'active';
 
 /** Result of handleOAuthReturn() after the redirect back from Google. */
 export type OAuthReturn =
@@ -198,7 +210,7 @@ export function toAuthUser(u: Session['user'] | null | undefined): AuthUser | nu
   if (!u) return null;
   const email = (u.email ?? '').toLowerCase();
   const isGuest = u.is_anonymous === true || !email;
-  const meta = (u.app_metadata ?? {}) as { username?: unknown; provider?: unknown; providers?: unknown };
+  const meta = (u.app_metadata ?? {}) as { username?: unknown; provider?: unknown; providers?: unknown; email_verified?: unknown; legacy?: unknown };
   const synthetic = email.endsWith(SYNTHETIC_SUFFIX) ? email.slice(0, -SYNTHETIC_SUFFIX.length) : '';
   let username: string | null = null;
   if (!isGuest) {
@@ -208,7 +220,10 @@ export function toAuthUser(u: Session['user'] | null | undefined): AuthUser | nu
   const providers = Array.isArray(meta.providers) ? meta.providers : [];
   const google = meta.provider === 'google' || providers.includes('google');
   const provider: AuthProvider = isGuest ? 'anonymous' : synthetic || !google ? 'password' : 'google';
-  return { id: u.id, username, isGuest, provider, needsUsername: !isGuest && !username };
+  // only an explicit `false` blocks: legacy accounts / tokens issued before the claim existed stay usable
+  const emailVerified = !isGuest && (meta.email_verified !== false || meta.legacy === true);
+  const status: AccountStatus = isGuest ? 'guest' : emailVerified ? 'active' : 'unverified';
+  return { id: u.id, username, isGuest, provider, needsUsername: !isGuest && !username, emailVerified, status };
 }
 
 const toUser = (s: Session | null): AuthUser | null => toAuthUser(s?.user);
@@ -260,6 +275,7 @@ async function refresh(c: SupabaseClient): Promise<void> {
 
 /**
  * Creates a password account. `email` is required and is stored as recovery address (a confirmation link is sent).
+ * The new account has `status 'unverified'` until the link is opened (verifyRecoveryEmail()).
  * A guest is upgraded in place (same user id, so ratings are kept); without a session a fresh account is created.
  * If only storing the email fails, the account exists anyway: the AuthFailure then has `accountCreated = true`.
  */
@@ -314,7 +330,8 @@ export async function login(username: string, password: string): Promise<AuthUse
   await whenLoaded();
   const guest = (await c.auth.getSession()).data.session;
   const guestToken = guest && toUser(guest)!.isGuest ? guest.access_token : null;
-  const { error } = await c.auth.signInWithPassword({ email: toEmail(u), password });
+  const { data: signedIn, error } = await c.auth.signInWithPassword({ email: toEmail(u), password });
+  if (signedIn?.session) session = signedIn.session;
   if (error) {
     if (error.status === 429 || error.name === 'AuthRetryableFetchError') throw fail(error);
     throw new AuthFailure('Benutzername oder Passwort falsch.');
@@ -658,8 +675,34 @@ export async function confirmPasswordReset(token: string, newPassword: string): 
   return { username: USERNAME_RE.test(u) ? u : null };
 }
 
-/** Confirms a recovery address with the token from the confirmation link. */
+/**
+ * Confirms a recovery address with the token from the confirmation link. Afterwards the session is refreshed, so a
+ * signed-in, unverified account becomes `status 'active'` right away (the link also works without a session).
+ */
 export async function verifyRecoveryEmail(token: string): Promise<void> {
   if (typeof token !== 'string' || !token.trim()) throw new AuthFailure(MSG.badLink);
   await invoke('recovery-email-verify', { token: token.trim() }, 'Bestätigung fehlgeschlagen. Bitte erneut versuchen.');
+  if (session && !toUser(session)?.isGuest) await refresh(getClient()).catch(() => {});
+}
+
+/**
+ * Sends the confirmation link again to the stored, not yet confirmed address (`recovery-email-set` with
+ * `{ resend: true }`, no password, rate-limited server-side).
+ */
+export async function resendVerification(): Promise<void> {
+  getClient();
+  await whenLoaded();
+  requireAccount();
+  await invoke('recovery-email-set', { resend: true }, 'Senden fehlgeschlagen. Bitte erneut versuchen.');
+}
+
+/** Reloads the signed-in user from the server (e.g. after the email was confirmed in another tab). */
+export async function refreshUser(): Promise<AuthUser | null> {
+  const c = getClient();
+  await whenLoaded();
+  if (!session) return null;
+  const { data, error } = await c.auth.refreshSession();
+  if (error) throw fail(error);
+  if (data?.session) session = data.session;
+  return currentUser();
 }

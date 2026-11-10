@@ -27,7 +27,19 @@ removeRecoveryEmail(password: string): Promise<void>
 getRecoveryEmailStatus(): Promise<{ email: string | null; verified: boolean }>  // via RPC konto_recovery_email_status()
 requestPasswordReset(username: string): Promise<void>  // antwortet immer gleich (keine Enumeration)
 confirmPasswordReset(token: string, newPassword: string): Promise<{ username: string }>
-verifyRecoveryEmail(token: string): Promise<void>
+verifyRecoveryEmail(token: string): Promise<void>   // danach refreshSession → status 'active'
+// E-Mail-Pflicht + Google (siehe CONTRACT-email-google.md)
+// AuthUser = { id, username, isGuest, provider: 'password'|'google'|'anonymous', needsUsername, emailVerified,
+//              status: 'guest'|'unverified'|'active' }   – nur 'active' ist ein nutzbares Konto
+register(username: string, password: string, email: string): Promise<AuthUser>  // E-Mail Pflicht; endet 'unverified';
+                                           // AuthFailure.accountCreated, wenn nur die E-Mail nicht gespeichert wurde
+resendVerification(): Promise<void>        // recovery-email-set {resend:true}
+refreshUser(): Promise<AuthUser | null>
+signInWithGoogle(returnTo?: string): Promise<void>   // Gast: linkIdentity, sonst / Fallback: signInWithOAuth
+isOAuthReturn(): boolean; handleOAuthReturn(): Promise<OAuthReturn | null>   // nur Konto-Seite
+setUsername(username: string): Promise<AuthUser>     // Edge Function set-username
+deleteAccount(passwordOrConfirm?: string | { confirm: string }): Promise<void> // Google: {confirm}; code 'reauth_required'
+reauthWithGoogle(returnTo?: string): Promise<void>
 ```
 `return`-Parameter: nur URLs auf https://yezun.de/ (bzw. localhost im Dev) akzeptieren – kein Open Redirect.
 

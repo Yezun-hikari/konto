@@ -183,7 +183,8 @@ enable_signup = true
 # Allow/disallow anonymous sign-ins to your project.
 enable_anonymous_sign_ins = true
 # Allow/disallow testing manual linking of accounts
-enable_manual_linking = false
+# On: a guest becomes a Google account via linkIdentity (SDK signInWithGoogle), keeping its id, Elo and data.
+enable_manual_linking = true
 # Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
 minimum_password_length = 8
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
@@ -349,6 +350,21 @@ skip_nonce_check = false
 # If enabled, it will allow the user to successfully authenticate when the provider does not return an email address.
 email_optional = false
 
+# Google sign-in (yezun.de/konto, "Mit Google anmelden"). Local dev only; the hosted project is set in the
+# dashboard (see README). Put the OAuth client of the Google Cloud project into supabase/.env (git-ignored):
+#   SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+#   SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET=...
+# Authorized redirect URI in Google Cloud for local dev: http://127.0.0.1:54321/auth/v1/callback
+[auth.external.google]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
+redirect_uri = ""
+url = ""
+# Required for local sign in with Google auth (see the apple block above).
+skip_nonce_check = true
+email_optional = false
+
 # Allow Solana wallet holders to sign in to your project via the Sign in with Solana (SIWS) standard.
 # You can configure "web3" rate limit in the [auth.rate_limit] section and set up [auth.captcha] if self-hosting.
 [auth.web3.solana]
@@ -468,6 +484,10 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.password-change]
+verify_jwt = true
+
+# Google accounts choose their username once (logged-in, confirmed accounts only).
+[functions.set-username]
 verify_jwt = true
 
 # Reached from mail links / the login page without a session: no JWT check (they validate the token themselves).

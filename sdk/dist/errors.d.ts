@@ -2,6 +2,14 @@ import { type AuthError } from '@supabase/supabase-js';
 export declare const NOT_CONFIGURED = "Online-Modus nicht konfiguriert";
 /** Every SDK function rejects with this; `message` is German and safe to show. */
 export declare class AuthFailure extends Error {
+    /** Machine-readable reason where the caller may react to it (e.g. 'reauth_required', 'username_taken'). */
+    code?: string;
+    /** register(): true when the account exists although a later step (storing the email) failed. */
+    accountCreated?: boolean;
+    constructor(message: string, opts?: {
+        code?: string;
+        accountCreated?: boolean;
+    });
 }
 export declare const MSG: {
     readonly unknown: 'Unbekannter Fehler. Bitte erneut versuchen.';
@@ -11,6 +19,9 @@ export declare const MSG: {
     readonly badLink: 'Der Link ist ungültig oder abgelaufen.';
     readonly badEmail: 'Bitte eine gültige E-Mail-Adresse eingeben.';
     readonly notSignedIn: 'Nicht angemeldet.';
+    readonly usernameTaken: 'Dieser Benutzername ist schon vergeben.';
+    readonly reauthRequired: 'Bitte melde dich zur Bestätigung erneut mit Google an und versuche es dann noch einmal.';
+    readonly googleFailed: 'Anmeldung mit Google fehlgeschlagen. Bitte erneut versuchen.';
 };
 /** Maps a GoTrue error (supabase.auth.*) to an AuthFailure. Identical to xox src/auth. */
 export declare function fail(e: AuthError | null | undefined, fallback?: string): AuthFailure;
