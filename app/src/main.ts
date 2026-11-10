@@ -12,6 +12,9 @@ import { resetRequestScreen, resetScreen } from './screens/reset.ts';
 import { unverifiedScreen } from './screens/unverified.ts';
 import { verifyScreen } from './screens/verify.ts';
 import { initTheme } from './theme.ts';
+import { datenschutz } from './legal/datenschutz.ts';
+import { nutzungsbedingungen } from './legal/nutzungsbedingungen.ts';
+import { legalScreen } from './legal/render.ts';
 
 registerScreen('konto', kontoScreen);
 registerScreen('login', loginScreen);
@@ -21,6 +24,9 @@ registerScreen('verify-email', verifyScreen);
 registerScreen('anmeldung', oauthReturnScreen);
 registerScreen('benutzername', usernameScreen);
 registerScreen('bestaetigen', unverifiedScreen);
+// Legal pages: plain text, no Supabase needed, open to everyone (also unverified accounts, see the guard).
+registerScreen('datenschutz', legalScreen(datenschutz));
+registerScreen('nutzungsbedingungen', legalScreen(nutzungsbedingungen));
 
 // Redirect back from Google (`/konto/?return=…&code=…`): the SDK captures the parameters when its client is
 // created; `?code` stays in the URL until supabase-js has exchanged it, the screen #/anmeldung cleans up.
@@ -29,8 +35,9 @@ if (isConfigured() && isOAuthReturn()) {
   history.replaceState(null, '', location.pathname + location.search + href('anmeldung', { return: ret }));
 }
 
-// An account whose email is not confirmed yet only sees the confirmation screen (except the link target itself).
-const OPEN_FOR_UNVERIFIED = new Set(['verify-email', 'anmeldung', 'bestaetigen']);
+// An account whose email is not confirmed yet only sees the confirmation screen (except the link target itself
+// and the legal pages).
+const OPEN_FOR_UNVERIFIED = new Set(['verify-email', 'anmeldung', 'bestaetigen', 'datenschutz', 'nutzungsbedingungen']);
 setGuard((id) => (currentUser()?.status === 'unverified' && !OPEN_FOR_UNVERIFIED.has(id) ? 'bestaetigen' : null));
 
 initTheme(document.querySelector<HTMLButtonElement>('#theme-toggle')!);

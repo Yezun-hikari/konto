@@ -88,6 +88,15 @@ export const loginScreen: Screen = {
               'Wir schicken dir einen Bestätigungslink an diese Adresse. Dein Konto kannst du nutzen, sobald du ihn geöffnet hast. ' +
                 'Mit der Adresse kannst du ein vergessenes Passwort zurücksetzen; sie ist für niemanden sichtbar.',
             ),
+            el(
+              'p',
+              { className: 'note' },
+              'Mit der Registrierung akzeptierst du die ',
+              el('a', { text: 'Nutzungsbedingungen', attrs: { href: href('nutzungsbedingungen') } }),
+              ' und hast die ',
+              el('a', { text: 'Datenschutzerklärung', attrs: { href: href('datenschutz') } }),
+              ' gelesen.',
+            ),
           ],
           'Konto erstellen',
           async (f) => {
