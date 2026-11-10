@@ -9,6 +9,7 @@ export interface Screen {
 }
 
 const screens = new Map<string, Screen>();
+const routeListeners: ((params: URLSearchParams) => void)[] = [];
 let outlet: HTMLElement | null = null;
 let cleanup: void | (() => void);
 
@@ -22,6 +23,11 @@ export function href(id: string, params?: Record<string, string | null | undefin
   for (const [k, v] of Object.entries(params ?? {})) if (v) q.set(k, v);
   const s = q.toString();
   return `#/${id}${s ? '?' + s : ''}`;
+}
+
+/** Called after every screen change with the route's params (e.g. to update the header). */
+export function onRoute(cb: (params: URLSearchParams) => void): void {
+  routeListeners.push(cb);
 }
 
 export function navigate(id: string, params?: Record<string, string | null | undefined>, replace = false): void {
@@ -48,7 +54,9 @@ function render(): void {
   cleanup?.();
   outlet.replaceChildren();
   document.title = `${screen.title} · Konto · yezun.de`;
-  cleanup = screen.mount(outlet, new URLSearchParams(query));
+  const params = new URLSearchParams(query);
+  cleanup = screen.mount(outlet, params);
+  for (const cb of routeListeners) cb(params);
   // Move focus to the new screen's heading so screen readers follow the change.
   outlet.querySelector<HTMLElement>('h1')?.focus({ preventScroll: true });
   window.scrollTo(0, 0);

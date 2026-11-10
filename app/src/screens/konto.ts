@@ -12,7 +12,7 @@ import {
   type AuthUser,
 } from '../../../sdk/src/index.ts';
 import { announce } from '../announce.ts';
-import { card, el, errorText, field, form, linkBtn, note, panel, returnTarget, setMsg, shortUrl } from '../dom.ts';
+import { section, el, errorText, field, form, linkBtn, note, panel, returnTarget, setMsg, shortUrl } from '../dom.ts';
 import { href, type Screen } from '../router.ts';
 import { currentPasswordField, newPasswordFields, notConfigured } from './common.ts';
 
@@ -32,11 +32,11 @@ export const kontoScreen: Screen = {
       const user = currentUser();
       body.replaceChildren();
 
-      const status = card('Status');
+      const status = section('Status');
       status.append(
-        el('p', {
-          text: !user ? 'Nicht angemeldet.' : user.isGuest ? 'Gast (ohne Konto, nur auf diesem Gerät).' : `Angemeldet als ${user.username}`,
-        }),
+        !user || user.isGuest
+          ? el('p', { text: !user ? 'Nicht angemeldet.' : 'Gast (ohne Konto, nur auf diesem Gerät).' })
+          : el('p', {}, 'Angemeldet als ', el('strong', { text: user.username ?? '' })),
       );
       const actions = el('div', { className: 'actions' });
       if (ret) actions.append(linkBtn(`Zurück zu ${shortUrl(ret)}`, ret, true));
@@ -68,7 +68,7 @@ export const kontoScreen: Screen = {
 };
 
 function recoveryCard(alive: () => boolean): HTMLElement {
-  const c = card('Wiederherstellungs-E-Mail');
+  const c = section('Wiederherstellungs-E-Mail');
   const state = el('p', { className: 'muted', text: 'Lädt …', attrs: { role: 'status' } });
   const content = el('div', { className: 'stack' });
   const flash = el('p', { className: 'msg ok', attrs: { role: 'status' } });
@@ -102,11 +102,11 @@ function recoveryCard(alive: () => boolean): HTMLElement {
       state.textContent = 'Keine E-Mail-Adresse hinterlegt. Ohne sie ist kein Zurücksetzen des Passworts möglich.';
       state.className = 'note warn';
     } else {
+      state.className = 'email-state';
       state.replaceChildren(
         el('strong', { text: s.email }),
-        ' ',
         el('span', {
-          className: s.verified ? 'badge ok' : 'badge warn',
+          className: s.verified ? 'state ok' : 'state warn',
           text: s.verified ? 'bestätigt' : 'noch nicht bestätigt',
         }),
       );
@@ -147,7 +147,7 @@ function recoveryCard(alive: () => boolean): HTMLElement {
 }
 
 function passwordCard(): HTMLElement {
-  return card(
+  return section(
     'Passwort ändern',
     form([currentPasswordField(), ...newPasswordFields('Neues Passwort')], 'Passwort ändern', async (f, formEl) => {
       if (f.p !== f.p2) throw new AuthFailure('Die Passwörter stimmen nicht überein.');
@@ -166,17 +166,19 @@ function sessionCard(): HTMLElement {
     await logout().catch(() => {});
     announce('Abgemeldet.');
   });
-  return card('Sitzung', note('Meldet dich auf diesem Gerät auf allen Seiten von yezun.de ab.'), btn);
+  return section('Sitzung', note('Meldet dich auf diesem Gerät auf allen Seiten von yezun.de ab.'), btn);
 }
 
 function deleteCard(user: AuthUser): HTMLElement {
   const btn = el('button', { className: 'btn danger', text: user.isGuest ? 'Gastdaten löschen …' : 'Konto löschen …', attrs: { type: 'button' } });
   btn.addEventListener('click', () => confirmDelete(!user.isGuest));
-  return card(
+  const s = section(
     user.isGuest ? 'Gastdaten löschen' : 'Konto löschen',
     note('Löscht dein Konto und alle zugehörigen Daten auf allen Seiten von yezun.de (z. B. Spielstände, Wertungen, Wiederherstellungs-E-Mail) endgültig.'),
     btn,
   );
+  s.classList.add('danger-zone');
+  return s;
 }
 
 function confirmDelete(needsPassword: boolean): void {

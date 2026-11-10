@@ -1,6 +1,6 @@
 import { AuthFailure, confirmPasswordReset, login, requestPasswordReset } from '../../../sdk/src/index.ts';
 import { announce } from '../announce.ts';
-import { card, el, form, linkBtn, note, panel, returnTarget } from '../dom.ts';
+import { section, el, form, linkBtn, note, panel, returnTarget } from '../dom.ts';
 import { href, navigate, scrubParams, type Screen } from '../router.ts';
 import { newPasswordFields, notConfigured, usernameField } from './common.ts';
 
@@ -14,7 +14,7 @@ export const resetScreen: Screen = {
     panel(root, 'Neues Passwort', body);
     if (!token) {
       body.append(
-        card(
+        section(
           'Link unvollständig',
           note('Dieser Link enthält keinen gültigen Code. Öffne den Link aus der E-Mail vollständig oder fordere einen neuen an.', 'warn'),
           linkBtn('Neuen Link anfordern', href('reset-request'), true),
@@ -23,7 +23,7 @@ export const resetScreen: Screen = {
       return;
     }
     body.append(
-      card(
+      section(
         'Neues Passwort festlegen',
         note('Der Link ist eine Stunde gültig und kann nur einmal verwendet werden.'),
         form(newPasswordFields('Neues Passwort'), 'Passwort speichern', async (f) => {
@@ -42,7 +42,7 @@ export const resetScreen: Screen = {
             }
           }
           body.replaceChildren(
-            card(
+            section(
               'Passwort geändert',
               note('Dein neues Passwort ist gespeichert. Du kannst dich jetzt damit anmelden.', 'ok'),
               linkBtn('Zur Anmeldung', href('login'), true),
@@ -64,7 +64,7 @@ export const resetRequestScreen: Screen = {
     panel(
       root,
       'Passwort vergessen',
-      card(
+      section(
         'Link zum Zurücksetzen anfordern',
         note('Das geht nur, wenn für dein Konto eine bestätigte Wiederherstellungs-E-Mail hinterlegt ist. Ohne sie kann das Passwort nicht zurückgesetzt werden.'),
         form([usernameField(false)], 'Link anfordern', async (f, formEl) => {

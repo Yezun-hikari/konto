@@ -1,6 +1,6 @@
 import { AuthFailure, currentUser, login, logout, onAuthChange, ready, register } from '../../../sdk/src/index.ts';
 import { announce } from '../announce.ts';
-import { card, el, form, linkBtn, note, panel, returnTarget, shortUrl } from '../dom.ts';
+import { section, el, form, linkBtn, note, panel, returnTarget, shortUrl } from '../dom.ts';
 import { href, navigate, type Screen } from '../router.ts';
 import { currentPasswordField, newPasswordFields, notConfigured, usernameField } from './common.ts';
 
@@ -30,7 +30,7 @@ export const loginScreen: Screen = {
 
       if (user && !user.isGuest) {
         heading.textContent = 'Angemeldet';
-        const c = card('Du bist angemeldet', el('p', { text: `Angemeldet als ${user.username}.` }));
+        const c = section('Du bist angemeldet', el('p', { text: `Angemeldet als ${user.username}.` }));
         const actions = el('div', { className: 'actions' });
         if (ret) actions.append(linkBtn(`Weiter zu ${shortUrl(ret)}`, ret, true));
         actions.append(linkBtn('Zum Konto', href('konto', { return: ret })));
@@ -53,7 +53,7 @@ export const loginScreen: Screen = {
       const panels: HTMLElement[] = [];
       const tabs: HTMLButtonElement[] = [];
 
-      const loginPanel = el('div', { className: 'card' });
+      const loginPanel = el('div', { className: 'tabpanel' });
       if (user?.isGuest) {
         loginPanel.append(
           note('Achtung: Wenn du dich in ein bestehendes Konto einloggst, wird dein aktuelles Gastkonto mit seinem Fortschritt gelöscht.', 'warn'),
@@ -68,7 +68,7 @@ export const loginScreen: Screen = {
         el('p', { className: 'small' }, el('a', { text: 'Passwort vergessen?', attrs: { href: href('reset-request', { return: ret }) } })),
       );
 
-      const regPanel = el('div', { className: 'card' });
+      const regPanel = el('div', { className: 'tabpanel' });
       regPanel.append(
         note(
           user?.isGuest

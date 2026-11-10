@@ -17,16 +17,17 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
-/** Screen frame: `<section class="panel"><h1>` + body. */
+/** Screen frame: `<div class="panel"><h1>` + body. */
 export function panel(root: HTMLElement, title: string, ...children: Node[]): HTMLElement {
   const h1 = el('h1', { text: title, attrs: { tabindex: '-1' } });
-  const s = el('section', { className: 'panel' }, h1, ...children);
+  const s = el('div', { className: 'panel' }, h1, ...children);
   root.append(s);
   return s;
 }
 
-export function card(title: string, ...children: Node[]): HTMLElement {
-  return el('section', { className: 'card' }, el('h2', { text: title }), ...children);
+/** A titled section of a screen; sections are separated by hairlines. */
+export function section(title: string, ...children: Node[]): HTMLElement {
+  return el('section', { className: 'section' }, el('h2', { text: title }), ...children);
 }
 
 export function note(text: string, kind: '' | 'warn' | 'ok' = ''): HTMLElement {
@@ -56,10 +57,13 @@ export interface FieldSpec {
   value?: string;
 }
 
-export function field(f: FieldSpec): HTMLLabelElement {
-  const span = el('span', { text: f.label });
-  if (f.hint) span.append(' ', el('small', { text: f.hint }));
-  const input = el('input', { attrs: { name: f.name, type: f.type ?? 'text' } });
+let fieldSeq = 0;
+
+/** Label above the input, optional hint text below it (linked via aria-describedby). */
+export function field(f: FieldSpec): HTMLElement {
+  const id = `f${++fieldSeq}-${f.name}`;
+  const label = el('label', { text: f.label, attrs: { for: id } });
+  const input = el('input', { attrs: { id, name: f.name, type: f.type ?? 'text' } });
   if (f.autocomplete) input.autocomplete = f.autocomplete as AutoFill;
   if (f.minlength) input.minLength = f.minlength;
   if (f.maxlength) input.maxLength = f.maxlength;
@@ -71,7 +75,13 @@ export function field(f: FieldSpec): HTMLLabelElement {
     input.spellcheck = false;
     input.setAttribute('autocorrect', 'off');
   }
-  return el('label', { className: 'field' }, span, input);
+  const box = el('div', { className: 'field' }, label, input);
+  if (f.hint) {
+    const hint = el('p', { className: 'hint', text: f.hint, attrs: { id: `${id}-hint` } });
+    input.setAttribute('aria-describedby', hint.id);
+    box.append(hint);
+  }
+  return box;
 }
 
 /**
