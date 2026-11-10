@@ -1,12 +1,16 @@
 // Deno-only helpers for the Konto Edge Functions: password check, tokens, mail via Resend.
 import { createClient, type SupabaseClient, type User } from 'npm:@supabase/supabase-js@2';
-import { base64url, MAIL_FROM, type Mail, MAX_PASSWORD } from '../_shared/konto.ts';
+import { accountKind, base64url, isEmailVerified, jwtClaims, MAIL_FROM, type Mail, MAX_PASSWORD } from '../_shared/konto.ts';
 import { check, HttpError, UUID } from './http.ts';
 
 export const NOT_REGISTERED = () =>
   new HttpError(403, 'not_registered', 'Nur mit einem registrierten Konto möglich (nicht als Gast).');
 export const WRONG_PASSWORD = () => new HttpError(403, 'wrong_password', 'Aktuelles Passwort ist falsch.');
 export const RATE_LIMITED = () => new HttpError(429, 'rate_limited', 'Zu viele Versuche. Bitte später erneut.');
+export const NOT_PASSWORD_ACCOUNT = () =>
+  new HttpError(400, 'not_password_account', 'Nur für Konten mit Passwort möglich (nicht bei Anmeldung mit Google).');
+export const EMAIL_UNVERIFIED = () =>
+  new HttpError(403, 'email_unverified', 'Bitte bestätige zuerst deine E-Mail-Adresse.');
 export const INVALID_TOKEN = () =>
   new HttpError(400, 'invalid_token', 'Der Link ist ungültig, abgelaufen oder wurde schon verwendet.');
 
@@ -24,6 +28,8 @@ export const PASSWORD_FAILURE_WINDOW = '15 minutes';
  * GoTrue directly (PUT /auth/v1/user) as long as the project has "Secure password change" off, see README.
  */
 export async function verifyPassword(user: User, password: unknown, db: SupabaseClient): Promise<void> {
+  if (user.is_anonymous) throw NOT_REGISTERED();
+  if (accountKind(user) !== 'password') throw NOT_PASSWORD_ACCOUNT();
   const allowed = check(
     await db.rpc('konto_password_check_allowed', {
       p_user_id: user.id,
@@ -48,17 +54,16 @@ export async function verifyPassword(user: User, password: unknown, db: Supabase
   await verifier.auth.signOut({ scope: 'local' }).catch(() => {});
 }
 
+/** Registered account with a confirmed email (app_metadata.email_verified), else 403 not_registered/email_unverified. */
+export function requireVerified(user: User): void {
+  if (user.is_anonymous) throw NOT_REGISTERED();
+  if (!isEmailVerified(user)) throw EMAIL_UNVERIFIED();
+}
+
 /** The `session_id` claim of an access token (already verified by db.auth.getUser in serve), or null. */
 export function sessionIdOf(jwt: string): string | null {
-  try {
-    const part = jwt.split('.')[1] ?? '';
-    const b64 = part.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(part.length / 4) * 4, '=');
-    const claims = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
-    const id = claims?.session_id;
-    return typeof id === 'string' && UUID.test(id) ? id : null;
-  } catch {
-    return null;
-  }
+  const id = jwtClaims(jwt)?.session_id;
+  return typeof id === 'string' && UUID.test(id) ? id : null;
 }
 
 export async function sha256Hex(s: string): Promise<string> {

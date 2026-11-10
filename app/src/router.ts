@@ -12,6 +12,17 @@ const screens = new Map<string, Screen>();
 const routeListeners: ((params: URLSearchParams) => void)[] = [];
 let outlet: HTMLElement | null = null;
 let cleanup: void | (() => void);
+let guard: ((id: string) => string | null) | null = null;
+
+/** Lets a check replace the requested screen (e.g. unconfirmed accounts only see the confirmation screen). */
+export function setGuard(fn: (id: string) => string | null): void {
+  guard = fn;
+}
+
+/** Re-renders the current route (after the guard's answer changed). */
+export function refreshRoute(): void {
+  render();
+}
 
 export function registerScreen(id: string, screen: Screen): void {
   screens.set(id, screen);
@@ -49,7 +60,9 @@ export function scrubParams(id: string, keep?: Record<string, string | null | un
 function render(): void {
   if (!outlet) return;
   const [path, query = ''] = location.hash.replace(/^#\/?/, '').split('?');
-  const id = screens.has(path) ? path : 'konto';
+  const requested = screens.has(path) ? path : 'konto';
+  const guarded = guard?.(requested);
+  const id = guarded && screens.has(guarded) ? guarded : requested;
   const screen = screens.get(id)!;
   cleanup?.();
   outlet.replaceChildren();

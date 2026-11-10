@@ -20,6 +20,15 @@ vi.mock('@supabase/supabase-js', async (importOriginal) => ({
 
 const registered = { access_token: 'acc', user: { id: 'u1', email: 'alice@users.yezun-games.invalid', is_anonymous: false } };
 const guest = { access_token: 'guest-token', user: { id: 'g1', is_anonymous: true } };
+const googleUser = (username?: string) => ({
+  access_token: 'gacc',
+  user: {
+    id: 'u2',
+    email: 'carol@gmail.example',
+    is_anonymous: false,
+    app_metadata: { provider: 'google', providers: ['google'], ...(username ? { username } : {}) },
+  },
+});
 
 function makeFake(session: unknown): Fake {
   const f: Fake = {
@@ -33,7 +42,9 @@ function makeFake(session: unknown): Fake {
       signInAnonymously: vi.fn(),
       signUp: vi.fn(async () => ({ data: {}, error: null })),
       updateUser: vi.fn(async () => ({ data: { user: {} }, error: null })),
-      refreshSession: vi.fn(async () => ({ data: {}, error: null })),
+      refreshSession: vi.fn(async () => ({ data: { session: f.session }, error: null })),
+      linkIdentity: vi.fn(async () => ({ data: { provider: 'google', url: 'https://accounts.example/' }, error: null })),
+      signInWithOAuth: vi.fn(async () => ({ data: { provider: 'google', url: 'https://accounts.example/' }, error: null })),
     },
     functions: { invoke: vi.fn(async () => ({ data: {}, error: null })) },
     rpc: vi.fn(async () => ({ data: [], error: null })),
@@ -76,8 +87,12 @@ describe('configuration', () => {
     sdk.configure({ url: 'https://p.supabase.co', anonKey: 'anon' });
     await sdk.ready;
     expect(createClient).toHaveBeenCalledTimes(1);
-    expect(createClient).toHaveBeenCalledWith('https://p.supabase.co', 'anon', { auth: { storageKey: 'yezun-games-auth' } });
-    expect(sdk.currentUser()).toEqual({ id: 'u1', username: 'alice', isGuest: false });
+    expect(createClient).toHaveBeenCalledWith('https://p.supabase.co', 'anon', {
+      auth: { storageKey: 'yezun-games-auth', flowType: 'pkce', detectSessionInUrl: true },
+    });
+    expect(sdk.currentUser()).toEqual({
+      id: 'u1', username: 'alice', isGuest: false, provider: 'password', needsUsername: false, emailVerified: true, status: 'active',
+    });
   });
 
   it('uses ?authslot only when allowed', async () => {
@@ -85,11 +100,13 @@ describe('configuration', () => {
     let sdk = await load(null, false);
     sdk.configure({ url: 'https://p.supabase.co', anonKey: 'anon', devAuthSlot: true });
     sdk.getClient();
-    expect(createClient).toHaveBeenLastCalledWith('https://p.supabase.co', 'anon', { auth: { storageKey: 'yezun-games-auth-2' } });
+    expect(createClient).toHaveBeenLastCalledWith('https://p.supabase.co', 'anon', { auth: { storageKey: 'yezun-games-auth-2', flowType: 'pkce', detectSessionInUrl: true } });
     sdk = await load(null, false);
     sdk.configure({ url: 'https://p.supabase.co', anonKey: 'anon', devAuthSlot: false });
     sdk.getClient();
-    expect(createClient).toHaveBeenLastCalledWith('https://p.supabase.co', 'anon', { auth: { storageKey: 'yezun-games-auth' } });
+    expect(createClient).toHaveBeenLastCalledWith('https://p.supabase.co', 'anon', {
+      auth: { storageKey: 'yezun-games-auth', flowType: 'pkce', detectSessionInUrl: true },
+    });
   });
 
   it('rejects reconfiguration after first use, accepts identical values', async () => {
@@ -135,24 +152,73 @@ describe('login / register (unchanged xox behaviour)', () => {
     expect(fake.functions.invoke).toHaveBeenCalledWith('delete-account', { body: {}, headers: { Authorization: 'Bearer guest-token' } });
   });
 
-  it('upgrades a guest in place', async () => {
+  it('upgrades a guest in place and stores the recovery email', async () => {
     const sdk = await load(guest);
-    await sdk.register('Bob_1', 'password1');
+    fake.auth.updateUser.mockImplementationOnce(async () => ((fake.session = registered), { data: { user: {} }, error: null }));
+    const u = await sdk.register('Bob_1', 'password1', ' bob@example.org ');
     expect(fake.auth.updateUser).toHaveBeenCalledWith({ email: 'bob_1@users.yezun-games.invalid', password: 'password1' });
     expect(fake.auth.refreshSession).toHaveBeenCalled();
     expect(fake.auth.signUp).not.toHaveBeenCalled();
+    expect(fake.functions.invoke).toHaveBeenLastCalledWith('recovery-email-set', {
+      body: { password: 'password1', email: 'bob@example.org' },
+    });
+    expect(u.isGuest).toBe(false);
+  });
+
+  it('validates the email first', async () => {
+    const sdk = await load(guest);
+    for (const bad of ['', 'nope', 'a@b', 'x@users.yezun-games.invalid', undefined as unknown as string]) {
+      await expect(sdk.register('bob', 'password1', bad)).rejects.toThrow('Bitte eine gültige E-Mail-Adresse angeben.');
+    }
+    await expect(sdk.register('b', 'password1', 'b@example.org')).rejects.toThrow('Benutzername: 3–20 Zeichen');
+    await expect(sdk.register('bob', 'short', 'b@example.org')).rejects.toThrow('Passwort: mindestens 8 Zeichen.');
+    expect(fake.auth.updateUser).not.toHaveBeenCalled();
+    expect(fake.functions.invoke).not.toHaveBeenCalled();
+  });
+
+  it('keeps the account when storing the email fails (accountCreated)', async () => {
+    const sdk = await load(guest);
+    fake.auth.updateUser.mockImplementationOnce(async () => ((fake.session = registered), { data: { user: {} }, error: null }));
+    fake.functions.invoke.mockResolvedValueOnce({ data: null, error: httpError({ error: 'mail_failed' }, 502) });
+    const err = await sdk.register('bob', 'password1', 'bob@example.org').catch((e) => e);
+    expect(err).toBeInstanceOf(sdk.AuthFailure);
+    expect(err.accountCreated).toBe(true);
+    expect(err.message).toBe(
+      'Konto erstellt, aber die E-Mail-Adresse konnte nicht gespeichert werden: Die E-Mail konnte nicht gesendet werden. Bitte später erneut. Bitte unter Konto erneut eintragen.',
+    );
+    expect(sdk.currentUser()?.username).toBe('alice'); // still signed in
+    expect(fake.auth.signOut).not.toHaveBeenCalled();
+  });
+
+  it('maps a username_taken database error', async () => {
+    const sdk = await load(guest);
+    fake.auth.updateUser.mockResolvedValueOnce({
+      data: { user: null },
+      error: { name: 'AuthApiError', status: 500, code: 'unexpected_failure', message: 'Database error updating user' },
+    });
+    const err = await sdk.register('bob', 'password1', 'bob@example.org').catch((e) => e);
+    expect(err.message).toBe('Dieser Benutzername ist schon vergeben.');
+    expect(err.code).toBe('username_taken');
+    expect(err.accountCreated).toBeUndefined();
+    fake.session = null;
+    fake.auth.signUp.mockResolvedValueOnce({ data: {}, error: { name: 'AuthApiError', status: 500, message: 'username_taken' } });
+    await expect(sdk.register('bob', 'password1', 'bob@example.org')).rejects.toThrow('Dieser Benutzername ist schon vergeben.');
+    expect(fake.functions.invoke).not.toHaveBeenCalled();
   });
 
   it('signs up without a session and maps taken names', async () => {
     const sdk = await load(null);
     fake.auth.signUp.mockResolvedValueOnce({ data: {}, error: { name: 'AuthApiError', status: 422, code: 'user_already_exists' } });
-    await expect(sdk.register('bob', 'password1')).rejects.toThrow('Dieser Benutzername ist bereits vergeben.');
-    await expect(sdk.register('bob', 'short')).rejects.toThrow('Passwort: mindestens 8 Zeichen.');
+    await expect(sdk.register('bob', 'password1', 'b@example.org')).rejects.toThrow('Dieser Benutzername ist bereits vergeben.');
+    fake.auth.signUp.mockImplementationOnce(async () => ({ data: { session: registered }, error: null }));
+    await sdk.register('bob', 'password1', 'b@example.org');
+    expect(fake.auth.signUp).toHaveBeenLastCalledWith({ email: 'bob@users.yezun-games.invalid', password: 'password1' });
+    expect(fake.functions.invoke).toHaveBeenLastCalledWith('recovery-email-set', { body: { password: 'password1', email: 'b@example.org' } });
   });
 
   it('refuses to register when already signed in', async () => {
     const sdk = await load(registered);
-    await expect(sdk.register('bob', 'password1')).rejects.toThrow('Du bist bereits angemeldet.');
+    await expect(sdk.register('bob', 'password1', 'b@example.org')).rejects.toThrow('Du bist bereits angemeldet.');
   });
 
   it('changePassword goes through the password-change Edge Function', async () => {
@@ -283,5 +349,292 @@ describe('recovery email / password reset', () => {
     expect(fake.functions.invoke).toHaveBeenLastCalledWith('recovery-email-verify', { body: { token: 'tok' } });
     fake.functions.invoke.mockResolvedValueOnce({ data: null, error: httpError({ error: 'token_expired' }) });
     await expect(sdk.verifyRecoveryEmail('tok')).rejects.toThrow('Der Link ist ungültig oder abgelaufen.');
+  });
+});
+
+describe('AuthUser mapping', () => {
+  it('derives username, provider and needsUsername', async () => {
+    const sdk = await load(null);
+    expect(sdk.toAuthUser(null)).toBeNull();
+    expect(sdk.toAuthUser(guest.user as never)).toEqual({
+      id: 'g1', username: null, isGuest: true, provider: 'anonymous', needsUsername: false, emailVerified: false, status: 'guest',
+    });
+    expect(sdk.toAuthUser(registered.user as never)).toMatchObject({ username: 'alice', provider: 'password', needsUsername: false });
+    // app_metadata.username wins over the synthetic email
+    expect(sdk.toAuthUser({ ...registered.user, app_metadata: { username: 'alice2' } } as never)?.username).toBe('alice2');
+    // invalid claim → synthetic email
+    expect(sdk.toAuthUser({ ...registered.user, app_metadata: { username: 'Bad Name' } } as never)?.username).toBe('alice');
+    expect(sdk.toAuthUser(googleUser().user as never)).toMatchObject({ id: 'u2', username: null, isGuest: false, provider: 'google', needsUsername: true });
+    expect(sdk.toAuthUser(googleUser('carol').user as never)).toMatchObject({ username: 'carol', provider: 'google', needsUsername: false });
+    // a linked former guest: provider 'anonymous', providers include google
+    const linked = { id: 'g1', email: 'x@gmail.example', is_anonymous: false, app_metadata: { provider: 'anonymous', providers: ['anonymous', 'google'] } };
+    expect(sdk.toAuthUser(linked as never)).toMatchObject({ provider: 'google', needsUsername: true, username: null });
+    // the real email local part is never used as username
+    expect(sdk.toAuthUser(linked as never)?.username).toBeNull();
+  });
+
+  it('currentUser reflects a Google account without username', async () => {
+    const sdk = await load(googleUser());
+    expect(sdk.currentUser()).toMatchObject({ provider: 'google', needsUsername: true });
+    expect(sdk.isGuest()).toBe(false);
+  });
+});
+
+describe('setUsername', () => {
+  it('calls set-username and refreshes the session', async () => {
+    const sdk = await load(googleUser());
+    fake.auth.refreshSession.mockImplementationOnce(async () => ({ data: { session: googleUser('carol') }, error: null }));
+    const u = await sdk.setUsername(' Carol ');
+    expect(fake.functions.invoke).toHaveBeenLastCalledWith('set-username', { body: { username: 'carol' } });
+    expect(u).toMatchObject({ username: 'carol', needsUsername: false });
+    expect(sdk.currentUser()?.username).toBe('carol');
+  });
+  it('maps username_taken and validates', async () => {
+    const sdk = await load(googleUser());
+    await expect(sdk.setUsername('x')).rejects.toThrow('Benutzername: 3–20 Zeichen');
+    fake.functions.invoke.mockResolvedValueOnce({ data: null, error: httpError({ error: 'username_taken' }, 409) });
+    await expect(sdk.setUsername('carol')).rejects.toThrow('Dieser Benutzername ist schon vergeben.');
+    expect(fake.auth.refreshSession).not.toHaveBeenCalled();
+  });
+  it('refuses guests and accounts that already have a name', async () => {
+    let sdk = await load(guest);
+    await expect(sdk.setUsername('carol')).rejects.toThrow('Nicht angemeldet.');
+    sdk = await load(registered);
+    await expect(sdk.setUsername('carol')).rejects.toThrow('bereits ein Benutzername');
+    expect(fake.functions.invoke).not.toHaveBeenCalled();
+  });
+});
+
+describe('signInWithGoogle', () => {
+  const store = () => {
+    const m = new Map<string, string>();
+    vi.stubGlobal('sessionStorage', {
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: (k: string, v: string) => void m.set(k, v),
+      removeItem: (k: string) => void m.delete(k),
+    });
+    return m;
+  };
+  const redirect = `https://yezun.de/konto/?return=${encodeURIComponent('https://yezun.de/xox/')}`;
+
+  it('links the current guest to Google', async () => {
+    const m = store();
+    vi.stubGlobal('location', new URL('https://yezun.de/konto/#/login'));
+    const sdk = await load(guest);
+    await sdk.signInWithGoogle('https://yezun.de/xox/');
+    expect(fake.auth.linkIdentity).toHaveBeenCalledWith({ provider: 'google', options: { redirectTo: redirect } });
+    expect(fake.auth.signInWithOAuth).not.toHaveBeenCalled();
+    const pending = JSON.parse(m.get('yezun-games-auth-oauth')!);
+    expect(pending.mode).toBe('link');
+    expect(pending.guestToken).toBeUndefined(); // the guest becomes the account: nothing to delete
+  });
+
+  it('drops an unsafe return target', async () => {
+    store();
+    vi.stubGlobal('location', new URL('https://yezun.de/konto/#/login'));
+    const sdk = await load(null);
+    await sdk.signInWithGoogle('https://evil.example/');
+    expect(fake.auth.signInWithOAuth).toHaveBeenCalledWith({ provider: 'google', options: { redirectTo: 'https://yezun.de/konto/' } });
+  });
+
+  it('falls back to signInWithOAuth when linking fails and remembers the guest', async () => {
+    const m = store();
+    vi.stubGlobal('location', new URL('https://yezun.de/konto/#/login'));
+    const sdk = await load(guest);
+    fake.auth.linkIdentity.mockResolvedValueOnce({
+      data: { provider: 'google', url: null },
+      error: { name: 'AuthApiError', status: 422, code: 'identity_already_exists', message: 'Identity is already linked' },
+    });
+    await sdk.signInWithGoogle('https://yezun.de/xox/');
+    expect(fake.auth.signInWithOAuth).toHaveBeenCalledWith({ provider: 'google', options: { redirectTo: redirect } });
+    expect(JSON.parse(m.get('yezun-games-auth-oauth')!)).toMatchObject({ mode: 'signin', guestId: 'g1', guestToken: 'guest-token' });
+  });
+
+  it('does not fall back on network errors', async () => {
+    store();
+    const sdk = await load(guest);
+    fake.auth.linkIdentity.mockResolvedValueOnce({ data: {}, error: { name: 'AuthRetryableFetchError', status: 0 } });
+    await expect(sdk.signInWithGoogle()).rejects.toThrow('Keine Verbindung zum Server.');
+    expect(fake.auth.signInWithOAuth).not.toHaveBeenCalled();
+  });
+
+  it('uses signInWithOAuth without a session and refuses when signed in', async () => {
+    const m = store();
+    const sdk = await load(null);
+    await sdk.signInWithGoogle();
+    expect(fake.auth.linkIdentity).not.toHaveBeenCalled();
+    expect(fake.auth.signInWithOAuth).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(m.get('yezun-games-auth-oauth')!).guestToken).toBeUndefined();
+    fake.session = registered;
+    await expect(sdk.signInWithGoogle()).rejects.toThrow('Du bist bereits angemeldet.');
+  });
+});
+
+describe('handleOAuthReturn', () => {
+  const pendingStore = (pending: unknown) => {
+    const m = new Map<string, string>([['yezun-games-auth-oauth', JSON.stringify({ at: Date.now(), ...(pending as object) })]]);
+    vi.stubGlobal('sessionStorage', {
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: (k: string, v: string) => void m.set(k, v),
+      removeItem: (k: string) => void m.delete(k),
+    });
+    return m;
+  };
+  const ret = encodeURIComponent('https://yezun.de/xox/');
+
+  it('returns null without callback parameters', async () => {
+    vi.stubGlobal('location', new URL('https://yezun.de/konto/#/konto'));
+    const sdk = await load(registered);
+    expect(sdk.isOAuthReturn()).toBe(false);
+    expect(await sdk.handleOAuthReturn()).toBeNull();
+  });
+
+  it('deletes the abandoned guest after a Google sign-in', async () => {
+    const m = pendingStore({ mode: 'signin', guestId: 'g1', guestToken: 'guest-token' });
+    vi.stubGlobal('location', new URL(`https://yezun.de/konto/?return=${ret}&code=abc`));
+    const sdk = await load(googleUser());
+    expect(sdk.isOAuthReturn()).toBe(true);
+    const r = await sdk.handleOAuthReturn();
+    expect(r).toMatchObject({ status: 'signed_in', mode: 'signin', returnTo: 'https://yezun.de/xox/', user: { needsUsername: true } });
+    expect(fake.functions.invoke).toHaveBeenCalledWith('delete-account', { body: {}, headers: { Authorization: 'Bearer guest-token' } });
+    expect(m.size).toBe(0);
+    expect(await sdk.handleOAuthReturn()).toBeNull(); // only once
+  });
+
+  it('keeps the guest when it was linked (same id)', async () => {
+    pendingStore({ mode: 'link' });
+    vi.stubGlobal('location', new URL('https://yezun.de/konto/?code=abc'));
+    const sdk = await load({ ...googleUser(), user: { ...googleUser().user, id: 'g1' } });
+    expect(await sdk.handleOAuthReturn()).toMatchObject({ status: 'signed_in', mode: 'link', returnTo: null });
+    expect(fake.functions.invoke).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a normal sign-in when the Google identity already has an account', async () => {
+    const m = pendingStore({ mode: 'link' });
+    vi.stubGlobal('location', new URL(`https://yezun.de/konto/?return=${ret}&error=server_error&error_code=identity_already_exists`));
+    const sdk = await load(guest);
+    expect(await sdk.handleOAuthReturn()).toEqual({ status: 'redirecting', returnTo: 'https://yezun.de/xox/' });
+    expect(fake.auth.signInWithOAuth).toHaveBeenCalledWith({
+      provider: 'google',
+      options: { redirectTo: `https://yezun.de/konto/?return=${ret}` },
+    });
+    expect(JSON.parse(m.get('yezun-games-auth-oauth')!)).toMatchObject({ mode: 'signin', guestId: 'g1', guestToken: 'guest-token' });
+  });
+
+  it('reports errors from the fragment', async () => {
+    pendingStore({ mode: 'signin' });
+    vi.stubGlobal('location', new URL('https://yezun.de/konto/#error=access_denied&error_description=x'));
+    const sdk = await load(guest);
+    expect(await sdk.handleOAuthReturn()).toEqual({ status: 'error', message: 'Die Anmeldung mit Google wurde abgebrochen.', returnTo: null });
+    expect(fake.auth.signInWithOAuth).not.toHaveBeenCalled();
+  });
+
+  it('reports a failed code exchange', async () => {
+    pendingStore({ mode: 'signin' });
+    vi.stubGlobal('location', new URL('https://yezun.de/konto/?code=abc'));
+    const sdk = await load(guest);
+    expect(await sdk.handleOAuthReturn()).toMatchObject({ status: 'error', message: 'Anmeldung mit Google fehlgeschlagen. Bitte erneut versuchen.' });
+  });
+});
+
+describe('deleteAccount (Google)', () => {
+  it('sends the username confirmation instead of a password', async () => {
+    const sdk = await load(googleUser('carol'));
+    await expect(sdk.deleteAccount({ confirm: 'bob' })).rejects.toThrow('Der Benutzername stimmt nicht überein.');
+    await expect(sdk.deleteAccount()).rejects.toThrow('Der Benutzername stimmt nicht überein.');
+    expect(fake.functions.invoke).not.toHaveBeenCalled();
+    await sdk.deleteAccount({ confirm: ' Carol ' });
+    expect(fake.functions.invoke).toHaveBeenLastCalledWith('delete-account', { body: { confirm: 'carol' } });
+    expect(fake.auth.signOut).toHaveBeenCalledWith({ scope: 'local' });
+  });
+
+  it('reports reauth_required with the server message and code', async () => {
+    const sdk = await load(googleUser('carol'));
+    fake.functions.invoke.mockResolvedValueOnce({
+      data: null,
+      error: httpError({ error: 'reauth_required', message: 'Bitte melde dich erneut an.' }, 401),
+    });
+    const err = await sdk.deleteAccount({ confirm: 'carol' }).catch((e) => e);
+    expect(err.message).toBe('Bitte melde dich erneut an.');
+    expect(err.code).toBe('reauth_required');
+    expect(fake.auth.signOut).not.toHaveBeenCalled();
+    fake.functions.invoke.mockResolvedValueOnce({ data: null, error: httpError({ error: 'reauth_required' }, 401) });
+    await expect(sdk.deleteAccount({ confirm: 'carol' })).rejects.toThrow('erneut mit Google an');
+  });
+
+  it('reauthWithGoogle starts a fresh Google sign-in', async () => {
+    const m = new Map<string, string>();
+    vi.stubGlobal('sessionStorage', { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k) });
+    vi.stubGlobal('location', new URL('https://yezun.de/konto/#/konto'));
+    const sdk = await load(googleUser('carol'));
+    await sdk.reauthWithGoogle();
+    expect(fake.auth.signInWithOAuth).toHaveBeenCalledWith({ provider: 'google', options: { redirectTo: 'https://yezun.de/konto/' } });
+    expect(JSON.parse(m.get('yezun-games-auth-oauth')!)).toMatchObject({ mode: 'reauth' });
+    const pw = await load(registered);
+    await expect(pw.reauthWithGoogle()).rejects.toThrow('Nur für Google-Konten möglich.');
+  });
+
+  it('guests delete without argument', async () => {
+    const sdk = await load(guest);
+    await sdk.deleteAccount();
+    expect(fake.functions.invoke).toHaveBeenLastCalledWith('delete-account', { body: {} });
+  });
+});
+
+describe('email verification status', () => {
+  const pw = (meta: Record<string, unknown>) => ({ ...registered, user: { ...registered.user, app_metadata: { username: 'alice', ...meta } } });
+
+  it('maps app_metadata.email_verified / legacy to status', async () => {
+    const sdk = await load(null);
+    expect(sdk.toAuthUser(pw({ email_verified: false }).user as never)).toMatchObject({ status: 'unverified', emailVerified: false, isGuest: false });
+    expect(sdk.toAuthUser(pw({ email_verified: true }).user as never)).toMatchObject({ status: 'active', emailVerified: true });
+    expect(sdk.toAuthUser(pw({ email_verified: false, legacy: true }).user as never)).toMatchObject({ status: 'active' });
+    expect(sdk.toAuthUser(pw({}).user as never)).toMatchObject({ status: 'active' }); // token from before the claim
+    expect(sdk.toAuthUser(googleUser('carol').user as never)).toMatchObject({ status: 'active' });
+  });
+
+  it('register() ends unverified, login() of an unverified account is allowed', async () => {
+    let sdk = await load(guest);
+    fake.auth.updateUser.mockImplementationOnce(async () => ((fake.session = pw({ email_verified: false })), { data: { user: {} }, error: null }));
+    expect(await sdk.register('alice', 'password1', 'a@example.org')).toMatchObject({ status: 'unverified', username: 'alice' });
+    sdk = await load(null);
+    fake.auth.signInWithPassword.mockResolvedValueOnce({ data: { session: pw({ email_verified: false }) }, error: null });
+    expect(await sdk.login('alice', 'password1')).toMatchObject({ status: 'unverified', username: 'alice' });
+  });
+
+  it('register() stays unverified when the refreshed token lacks the claim (guest upgrade)', async () => {
+    const sdk = await load(guest);
+    // GoTrue returns the pre-trigger user: no email_verified claim at all
+    fake.auth.updateUser.mockImplementationOnce(async () => ((fake.session = pw({})), { data: { user: {} }, error: null }));
+    expect(await sdk.register('alice', 'password1', 'a@example.org')).toMatchObject({ status: 'unverified' });
+    expect(sdk.currentUser()?.status).toBe('unverified');
+  });
+
+  it('resendVerification uses the resend mode without password', async () => {
+    const sdk = await load(pw({ email_verified: false }));
+    await sdk.resendVerification();
+    expect(fake.functions.invoke).toHaveBeenLastCalledWith('recovery-email-set', { body: { resend: true } });
+    fake.functions.invoke.mockResolvedValueOnce({ data: null, error: httpError({ error: 'rate_limited' }, 429) });
+    await expect(sdk.resendVerification()).rejects.toThrow('Zu viele Versuche. Bitte später erneut.');
+    const g = await load(guest);
+    await expect(g.resendVerification()).rejects.toThrow('Nicht angemeldet.');
+  });
+
+  it('verifyRecoveryEmail refreshes the session of a signed-in account', async () => {
+    const sdk = await load(pw({ email_verified: false }));
+    expect(sdk.currentUser()?.status).toBe('unverified');
+    fake.auth.refreshSession.mockImplementationOnce(async () => ({ data: { session: pw({ email_verified: true }) }, error: null }));
+    await sdk.verifyRecoveryEmail('tok');
+    expect(fake.auth.refreshSession).toHaveBeenCalledTimes(1);
+    expect(sdk.currentUser()?.status).toBe('active');
+    const anon = await load(null);
+    await anon.verifyRecoveryEmail('tok');
+    expect(fake.auth.refreshSession).not.toHaveBeenCalled();
+  });
+
+  it('refreshUser reloads the user', async () => {
+    const sdk = await load(pw({ email_verified: false }));
+    fake.auth.refreshSession.mockImplementationOnce(async () => ({ data: { session: pw({ email_verified: true }) }, error: null }));
+    expect(await sdk.refreshUser()).toMatchObject({ status: 'active' });
   });
 });

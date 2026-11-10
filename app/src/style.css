@@ -193,6 +193,71 @@ main {
   min-height: 52px;
 }
 
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 16px;
+}
+.footer-links a {
+  color: inherit;
+  padding: 8px 0;
+}
+
+/* ---------- Legal pages (long-form text) ---------- */
+/* Wider column for comfortable reading (~65 characters per line); header and footer follow it. */
+body:has(.legal) .bar,
+main:has(.legal) {
+  max-width: calc(40rem + 2 * var(--gutter));
+}
+.legal {
+  max-width: 65ch;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+.legal h1 {
+  font-size: 1.625rem;
+  letter-spacing: -0.01em;
+}
+.legal-stand {
+  margin-top: 6px;
+  margin-bottom: 24px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+.legal p,
+.legal ul {
+  margin: 0 0 12px;
+  line-height: 1.6;
+}
+.legal ul {
+  padding-left: 1.25em;
+}
+.legal li + li {
+  margin-top: 6px;
+}
+.legal section {
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+.legal h2 {
+  font-size: 1.125rem;
+  margin-bottom: 12px;
+}
+.legal h3 {
+  font-size: 1rem;
+  margin: 20px 0 8px;
+}
+/* Missing operator details: clearly visible until filled in app/src/legal/operator.ts. */
+mark.placeholder {
+  padding: 0 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--text);
+  font-weight: 600;
+}
+
 /* ---------- Screen structure ---------- */
 .panel h1 {
   font-size: 1.625rem;
@@ -361,6 +426,59 @@ main {
   justify-content: flex-end;
 }
 
+/* "Mit Google …": plain outlined button, the small G mark is the only colour. */
+.btn.google {
+  justify-self: start;
+  gap: 10px;
+  padding: 0 18px;
+  border: 1px solid var(--input-line);
+  border-radius: var(--radius);
+  background: var(--field);
+  color: var(--text);
+  text-decoration: none;
+}
+.btn.google:hover {
+  border-color: var(--muted);
+}
+.btn.google svg {
+  flex: none;
+}
+.oauth {
+  display: grid;
+  gap: 10px;
+}
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+
+/* Calm notice at the top of the account page. */
+.callout {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--warn);
+  border-radius: var(--radius);
+}
+.callout p {
+  color: var(--muted);
+}
+.callout .link-btn {
+  justify-self: start;
+  padding: 4px 0 0;
+  color: var(--accent);
+}
+
 /* ---------- Tabs (login / register) ---------- */
 .tabs {
   display: flex;
@@ -438,7 +556,8 @@ main {
     padding-top: 28px;
   }
   .form > .btn.primary,
-  .form > .btn.danger {
+  .form > .btn.danger,
+  .btn.google {
     justify-self: stretch;
   }
 }

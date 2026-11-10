@@ -23,6 +23,12 @@ bestehenden Migrationen als bereits angewendet erkennt). Neu hinzugekommen:
   200 pro Tag insgesamt (Tabelle `konto_mail_log`, nur Hash der Adresse); ein fehlgeschlagener Reset gibt einen
   Link nur frei, wenn seitdem kein neuerer angefordert wurde
 - `config.toml`: Auth-URLs auf `/konto/` (xox-URLs bleiben erlaubt), `[functions.*]`-Einträge der neuen Functions
+- Migration `20261110050000_konto_usernames_google.sql` + Edge Function `set-username`: Tabelle `konto_usernames`
+  (Benutzername jedes Kontos, aus den künstlichen Adressen befüllt), `app_metadata.username` /
+  `app_metadata.email_verified` im JWT, Google-Konten dürfen ihre echte Adresse in `auth.users` behalten
+  (siehe Abschnitt „Google-Anmeldung“)
+- Migration `20261110060000_konto_email_verified.sql`: Ein Konto ist erst nach Bestätigung der E-Mail-Adresse
+  nutzbar (`recovery-email-verify` setzt `email_verified`), Handschrift-RLS verlangt ein bestätigtes Konto
 
 **Ab jetzt deployt nur noch dieses Repo nach Supabase.** Im Repo `xox` müssen `supabase/` und
 `.github/workflows/supabase.yml` / `keepalive.yml` entfernt werden (sonst überschreiben sich zwei Repos
@@ -63,6 +69,8 @@ Entwicklung**. Im gehosteten Projekt musst du sie selbst setzen:
 | Authentication → Sign In / Providers → **Email** | **Minimum password length** | **8** |
 | Authentication → URL Configuration | Site URL | `https://yezun.de/konto/` |
 | Authentication → URL Configuration | Redirect URLs | `https://yezun.de/konto/`, `http://localhost:5173/konto/`, `https://yezun.de/xox/`, `http://localhost:5173/xox/` |
+| Authentication → Sign In / Providers | **Allow manual linking** | **an** (Gast → Google-Konto per `linkIdentity`, siehe unten) |
+| Authentication → Sign In / Providers → **Google** | Enable Sign in with Google | an (Client-ID/Secret siehe unten) |
 
 **Secure password change** bleibt bewusst aus: Ist es an, verlangt GoTrue für jede Passwortänderung aus einer
 Sitzung, die älter als 24 Stunden ist, einen Reauthentifizierungs-Code per E-Mail/SMS. Das bricht das
@@ -88,9 +96,10 @@ eigene, manuelle Entscheidung.
   `select cron.schedule('purge-stale-guests', '17 3 * * *', 'select public.purge_stale_guests()');`
 - `pg_cron` löscht stündlich abgelaufene Konto-Links (Job `purge-expired-konto-tokens`). Fehlt der Job:
   `select cron.schedule('purge-expired-konto-tokens', '41 * * * *', 'delete from public.konto_tokens where expires_at < now()');`
-- Ebenso stündlich: `purge-konto-password-failures` (Fehlversuche älter als 1 Tag) und `purge-konto-mail-log`
-  (Mail-Protokoll älter als 2 Tage). Fehlen sie, die `do $$ … $$`-Blöcke am Ende von
-  `20261110020000_konto_password_change.sql` und `20261110040000_konto_token_limits.sql` im SQL Editor ausführen.
+- Ebenso stündlich: `purge-konto-password-failures` (Fehlversuche älter als 1 Tag), `purge-konto-mail-log`
+  (Mail-Protokoll älter als 2 Tage) und `purge-konto-username-attempts` (`set-username`-Versuche älter als 1 Tag).
+  Fehlen sie, die `do $$ … $$`-Blöcke am Ende von `20261110020000_konto_password_change.sql`,
+  `20261110040000_konto_token_limits.sql` und `20261110050000_konto_usernames_google.sql` im SQL Editor ausführen.
 - `pg_cron` löscht außerdem stündlich Chat-Nachrichten, die älter als 24 Stunden sind (Job `purge-old-chat-messages`).
   Fehlt der Job, genauso im SQL Editor nachholen:
   `select cron.schedule('purge-old-chat-messages', '23 * * * *', $$delete from public.match_messages where created_at < now() - interval '24 hours'$$);`
@@ -98,7 +107,49 @@ eigene, manuelle Entscheidung.
   (sonst schlägt jede Gast-Anmeldung fehl).
 - **Nach der Einrichtung einmal testen:** auf der Seite ein Konto registrieren und wieder löschen. Das prüft,
   dass das gehostete Projekt die künstliche Domain `.invalid` (`<name>@users.yezun-games.invalid`) annimmt.
-  Die Datenbank lehnt jede andere E-Mail-Adresse ab (Trigger `enforce_synthetic_email`).
+  Die Datenbank lehnt jede andere E-Mail-Adresse ab (Trigger `enforce_synthetic_email`), außer bei Google-Konten.
+
+### Google-Anmeldung („Mit Google anmelden“)
+
+1. **Google Cloud Console** (<https://console.cloud.google.com>) → Projekt wählen oder anlegen →
+   **APIs & Services → OAuth consent screen** (bzw. „Google Auth Platform“): App-Name „Yezun“, Support-Mail,
+   autorisierte Domain `yezun.de`, Scopes nur `openid`, `…/auth/userinfo.email`, `…/auth/userinfo.profile`.
+   Danach veröffentlichen („In production“), sonst können sich nur Testnutzer anmelden.
+2. **APIs & Services → Credentials → Create credentials → OAuth client ID**, Typ **Web application**:
+   - Authorized JavaScript origins: `https://yezun.de`
+   - Authorized redirect URI: `https://<reference-id>.supabase.co/auth/v1/callback`
+     (für lokale Entwicklung zusätzlich `http://127.0.0.1:54321/auth/v1/callback`)
+   Client-ID und Client-Secret notieren (Secret in den Passwort-Manager, **nicht** ins Repo).
+3. Supabase-Dashboard → **Authentication → Sign In / Providers → Google**: aktivieren, Client-ID und
+   Client-Secret eintragen, speichern. Die dort angezeigte Callback-URL muss genau der Redirect-URI aus Schritt 2
+   entsprechen.
+4. **Authentication → Sign In / Providers**: **Allow manual linking** einschalten. Ohne das schlägt
+   `linkIdentity` fehl, und ein Gast würde bei „Mit Google anmelden“ ein neues, leeres Konto bekommen.
+5. **Authentication → URL Configuration → Redirect URLs**: `https://yezun.de/konto/` muss eingetragen sein (die
+   Seite leitet nach `https://yezun.de/konto/?return=…` zurück; ein Eintrag ohne Platzhalter erlaubt auch die
+   Query). Für lokale Tests `http://localhost:5173/konto/`.
+6. Lokal: `supabase/.env` (von Git ignoriert) mit `SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID=…` und
+   `SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET=…`, dann `npx supabase start` (`config.toml` hat
+   `[auth.external.google] enabled = true` und `enable_manual_linking = true`).
+7. Testen: als Gast „Mit Google anmelden“ → Benutzername wählen → Konto-Seite zeigt „Angemeldet mit Google als …“;
+   im Dashboard (Authentication → Users) hat der Nutzer dieselbe ID wie vorher der Gast und
+   `raw_app_meta_data` enthält `username` und `"email_verified": true`.
+
+Was die Datenbank daraus macht:
+- `auth.users.email` darf nur bei Google-Konten eine echte Adresse sein (Trigger `enforce_synthetic_email`:
+  `providers` enthält `google`, `provider = 'google'` oder es gibt eine `google`-Zeile in `auth.identities`). Eine
+  künstliche Adresse wird nie durch eine echte ersetzt (sonst ginge die Anmeldung per Benutzername verloren).
+- Benutzernamen stehen für alle Konten in `konto_usernames` (kein Client-Zugriff) und im JWT unter
+  `app_metadata.username`. Google-Konten wählen ihn einmal über `set-username` (409 `username_taken`, max.
+  10 Versuche pro 15 Minuten). Ein Name ist kontoübergreifend eindeutig: Registriert jemand per Passwort einen
+  Namen, den ein Google-Konto schon hat, scheitert das mit `username_taken` (GoTrue meldet das als 500
+  „Database error …“).
+- `app_metadata.email_verified`: Google-Konten sofort `true`, neue Passwort-Konten `false` bis zum Klick auf den
+  Bestätigungslink, Bestandskonten (vor der Migration) `true` und `legacy: true`. Ohne `true` verweigern
+  `set-username` und `password-change` mit 403 `email_unverified`, und die Handschrift-Tabellen sind gesperrt.
+- Google-Konten haben kein Passwort: `recovery-email-set`/`-remove` und `password-change` antworten mit 400
+  `not_password_account`; `delete-account` verlangt statt des Passworts `{ confirm: <benutzername> }` und eine
+  frische Anmeldung (JWT `iat` und Anmeldezeit in `amr` höchstens 10 Minuten alt, sonst 401 `reauth_required`).
 
 ### E-Mail-Versand (Resend) für Wiederherstellungs-E-Mail und Passwort-Reset
 
@@ -118,6 +169,8 @@ Die Konto-Functions verschicken Mails selbst über die Resend-HTTP-API (nicht ü
 
 Ablauf und Regeln:
 - Nur registrierte Konten (keine Gäste). Setzen/Entfernen verlangt das aktuelle Passwort (serverseitig geprüft).
+  `recovery-email-set` mit `{ resend: true }` schickt ohne Passwort einen neuen Link an die hinterlegte, noch
+  unbestätigte Adresse (gleiche Limits; 400 `nothing_pending`, wenn keine offen ist).
 - Die echte Adresse liegt in `konto_recovery_emails` (kein Client-Zugriff). Der Client sieht nur die maskierte
   Adresse über die RPC `konto_recovery_email_status()` (`{ email: 'ma***@example.com', verified }`, keine Zeile =
   keine Adresse).
@@ -251,7 +304,8 @@ Funktioniert nur im Entwicklungsmodus, nicht auf der veröffentlichten Seite.
 ## Was wo liegt
 
 - `migrations/` – Datenbankschema, RLS, SQL-Funktionen `finish_match`, `matchmake`, `ping`,
-  `purge_stale_guests`, `send_match_message`, `konto_*`, Trigger `enforce_synthetic_email`
+  `purge_stale_guests`, `send_match_message`, `konto_*`, Trigger `enforce_synthetic_email`,
+  `konto_account_meta`, `konto_username_store` (auf `auth.users`)
 - `functions/<name>/index.ts` – die Edge Functions
 - `functions/_shared/` – reiner TS-Code ohne Deno-APIs (`rules.ts`, `profanity.ts`, `bot.ts`, `konto.ts`), mit
   vitest-Tests (`*.test.ts`)

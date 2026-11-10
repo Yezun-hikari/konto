@@ -5,7 +5,18 @@ export const NOT_CONFIGURED = 'Online-Modus nicht konfiguriert';
 const MIN_PASSWORD = 8; // duplicated from rules.ts to keep this module import-free of it
 
 /** Every SDK function rejects with this; `message` is German and safe to show. */
-export class AuthFailure extends Error {}
+export class AuthFailure extends Error {
+  /** Machine-readable reason where the caller may react to it (e.g. 'reauth_required', 'username_taken'). */
+  code?: string;
+  /** register(): true when the account exists although a later step (storing the email) failed. */
+  accountCreated?: boolean;
+  constructor(message: string, opts: { code?: string; accountCreated?: boolean } = {}) {
+    super(message);
+    this.name = 'AuthFailure';
+    if (opts.code) this.code = opts.code;
+    if (opts.accountCreated) this.accountCreated = true;
+  }
+}
 
 export const MSG = {
   unknown: 'Unbekannter Fehler. Bitte erneut versuchen.',
@@ -15,6 +26,9 @@ export const MSG = {
   badLink: 'Der Link ist ungültig oder abgelaufen.',
   badEmail: 'Bitte eine gültige E-Mail-Adresse eingeben.',
   notSignedIn: 'Nicht angemeldet.',
+  usernameTaken: 'Dieser Benutzername ist schon vergeben.',
+  reauthRequired: 'Bitte melde dich zur Bestätigung erneut mit Google an und versuche es dann noch einmal.',
+  googleFailed: 'Anmeldung mit Google fehlgeschlagen. Bitte erneut versuchen.',
 } as const;
 
 /** Maps a GoTrue error (supabase.auth.*) to an AuthFailure. Identical to xox src/auth. */
@@ -59,6 +73,16 @@ const FUNCTION_MESSAGES: Record<string, string> = {
   mail_failed: 'Die E-Mail konnte nicht gesendet werden. Bitte später erneut.',
   mail_unavailable: 'Der E-Mail-Versand ist derzeit nicht eingerichtet.',
   send_failed: 'Die E-Mail konnte nicht gesendet werden. Bitte später erneut.',
+  username_taken: MSG.usernameTaken,
+  invalid_username: 'Benutzername: 3–20 Zeichen, nur a–z, 0–9 und _.',
+  username_already_set: 'Für dieses Konto ist bereits ein Benutzername festgelegt.',
+  username_set: 'Für dieses Konto ist bereits ein Benutzername festgelegt.',
+  reauth_required: MSG.reauthRequired,
+  confirm_mismatch: 'Der Benutzername stimmt nicht überein.',
+  not_password_account: 'Nur für Konten mit Passwort möglich.',
+  email_unverified: 'Bitte bestätige zuerst deine E-Mail-Adresse.',
+  nothing_pending: 'Es ist keine unbestätigte E-Mail-Adresse hinterlegt.',
+  no_pending_email: 'Es ist keine unbestätigte E-Mail-Adresse hinterlegt.',
 };
 
 export interface FunctionErrorInfo {
@@ -100,5 +124,5 @@ export async function functionFailure(
 ): Promise<AuthFailure> {
   const info = await functionErrorInfo(error);
   if (info === null) return new AuthFailure(MSG.network);
-  return new AuthFailure(overrides[info.code] ?? info.message ?? FUNCTION_MESSAGES[info.code] ?? fallback);
+  return new AuthFailure(overrides[info.code] ?? info.message ?? FUNCTION_MESSAGES[info.code] ?? fallback, { code: info.code });
 }
