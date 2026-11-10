@@ -1,7 +1,7 @@
 // Deno-only helpers for the Konto Edge Functions: password check, tokens, mail via Resend.
-import { createClient, type User } from 'npm:@supabase/supabase-js@2';
+import { createClient, type SupabaseClient, type User } from 'npm:@supabase/supabase-js@2';
 import { base64url, MAIL_FROM, type Mail, MAX_PASSWORD } from '../_shared/konto.ts';
-import { HttpError } from './http.ts';
+import { check, HttpError, UUID } from './http.ts';
 
 export const NOT_REGISTERED = () =>
   new HttpError(403, 'not_registered', 'Nur mit einem registrierten Konto möglich (nicht als Gast).');
@@ -10,21 +10,55 @@ export const RATE_LIMITED = () => new HttpError(429, 'rate_limited', 'Zu viele V
 export const INVALID_TOKEN = () =>
   new HttpError(400, 'invalid_token', 'Der Link ist ungültig, abgelaufen oder wurde schon verwendet.');
 
+/** Failed password checks per user before verifyPassword answers rate_limited, and the window they count in. */
+export const MAX_PASSWORD_FAILURES = 5;
+export const PASSWORD_FAILURE_WINDOW = '15 minutes';
+
 /**
- * Verifies the caller's current password server-side (a stolen access token alone is not enough), like
- * delete-account. Uses a throwaway anon-key client; the session the check creates is revoked right away.
+ * Verifies the caller's current password server-side, like delete-account. Uses a throwaway anon-key client; the
+ * session the check creates is revoked right away. At most MAX_PASSWORD_FAILURES wrong passwords per user in
+ * PASSWORD_FAILURE_WINDOW (counted in konto_password_failures), then rate_limited: GoTrue's own sign-in limit is
+ * per IP, and here every request comes from the Edge Function, so it would not stop guessing for one account.
+ *
+ * Note: this protects the operations that go through the Edge Functions. A stolen access token can still call
+ * GoTrue directly (PUT /auth/v1/user) as long as the project has "Secure password change" off, see README.
  */
-export async function verifyPassword(user: User, password: unknown): Promise<void> {
+export async function verifyPassword(user: User, password: unknown, db: SupabaseClient): Promise<void> {
+  const allowed = check(
+    await db.rpc('konto_password_check_allowed', {
+      p_user_id: user.id,
+      p_max: MAX_PASSWORD_FAILURES,
+      p_window: PASSWORD_FAILURE_WINDOW,
+    }),
+  ) as boolean;
+  if (!allowed) throw RATE_LIMITED();
+  const wrong = async () => {
+    check(await db.rpc('konto_note_password_failure', { p_user_id: user.id }));
+    return WRONG_PASSWORD();
+  };
   if (typeof password !== 'string' || !password || password.length > MAX_PASSWORD || !user.email) {
-    throw WRONG_PASSWORD();
+    throw await wrong();
   }
   const verifier = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_ANON_KEY')!, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
   const { error } = await verifier.auth.signInWithPassword({ email: user.email, password });
-  if (error) throw error.status === 429 ? RATE_LIMITED() : WRONG_PASSWORD();
+  if (error) throw error.status === 429 ? RATE_LIMITED() : await wrong();
   // ends only this throwaway session (scope local), not the user's real ones
   await verifier.auth.signOut({ scope: 'local' }).catch(() => {});
+}
+
+/** The `session_id` claim of an access token (already verified by db.auth.getUser in serve), or null. */
+export function sessionIdOf(jwt: string): string | null {
+  try {
+    const part = jwt.split('.')[1] ?? '';
+    const b64 = part.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(part.length / 4) * 4, '=');
+    const claims = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))));
+    const id = claims?.session_id;
+    return typeof id === 'string' && UUID.test(id) ? id : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function sha256Hex(s: string): Promise<string> {

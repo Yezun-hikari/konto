@@ -217,22 +217,19 @@ export async function logout() {
     if (error)
         throw fail(error);
 }
-/** Re-checks the password of the signed-in (non-guest) user. */
-async function reauth(password) {
-    const c = getClient();
-    const me = currentUser();
-    if (!me?.username)
-        throw new AuthFailure(MSG.notSignedIn);
-    const { error } = await c.auth.signInWithPassword({ email: toEmail(me.username), password });
-    if (error)
-        throw error.status === 429 ? fail(error) : new AuthFailure(MSG.wrongPassword);
-}
+/**
+ * Changes the password of the signed-in (non-guest) user. The current password is verified server-side (Edge
+ * Function password-change, at most 5 wrong attempts per 15 minutes); afterwards all OTHER sessions of the account
+ * are signed out, this one stays signed in.
+ */
 export async function changePassword(currentPassword, newPassword) {
+    getClient();
+    await whenLoaded();
+    requireAccount();
     checkPassword(newPassword);
-    await reauth(currentPassword);
-    const { error } = await getClient().auth.updateUser({ password: newPassword });
-    if (error)
-        throw fail(error);
+    if (!currentPassword)
+        throw new AuthFailure(MSG.wrongPassword);
+    await invoke('password-change', { password: currentPassword, newPassword }, 'Passwort konnte nicht geändert werden. Bitte erneut versuchen.');
 }
 /**
  * Permanently deletes the account and all its data (all sites sharing the project, recovery email included).

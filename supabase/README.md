@@ -15,6 +15,13 @@ bestehenden Migrationen als bereits angewendet erkennt). Neu hinzugekommen:
 - Migration `20261110010000_handwriting.sql`: Tabellen `handwriting_glyphs`, `handwriting_settings`
 - Edge Functions `recovery-email-set`, `recovery-email-remove`, `recovery-email-verify`,
   `password-reset-request`, `password-reset-confirm` (Helfer: `functions/_server/konto.ts`, `functions/_shared/konto.ts`)
+- Migration `20261110020000_konto_password_change.sql` + Edge Function `password-change`: Passwort ändern mit
+  serverseitiger Prüfung des aktuellen Passworts (Fehlversuche pro Konto begrenzt, Tabelle `konto_password_failures`),
+  danach werden alle anderen Sitzungen beendet
+- Migration `20261110030000_handwriting_quota.sql`: `variant` 0..2, `char` 1..4 Zeichen, höchstens 500 Glyphen pro Konto
+- Migration `20261110040000_konto_token_limits.sql`: Bestätigungsmails höchstens 3 pro Empfängeradresse und Tag und
+  200 pro Tag insgesamt (Tabelle `konto_mail_log`, nur Hash der Adresse); ein fehlgeschlagener Reset gibt einen
+  Link nur frei, wenn seitdem kein neuerer angefordert wurde
 - `config.toml`: Auth-URLs auf `/konto/` (xox-URLs bleiben erlaubt), `[functions.*]`-Einträge der neuen Functions
 
 **Ab jetzt deployt nur noch dieses Repo nach Supabase.** Im Repo `xox` müssen `supabase/` und
@@ -52,9 +59,19 @@ Entwicklung**. Im gehosteten Projekt musst du sie selbst setzen:
 | Authentication → Sign In / Providers → **Email** | Enable Email provider | an |
 | Authentication → Sign In / Providers → **Email** | **Confirm email** | **aus** |
 | Authentication → Sign In / Providers → **Email** | Secure email change | aus |
+| Authentication → Sign In / Providers → **Email** | **Secure password change** | **aus** (siehe unten) |
 | Authentication → Sign In / Providers → **Email** | **Minimum password length** | **8** |
 | Authentication → URL Configuration | Site URL | `https://yezun.de/konto/` |
 | Authentication → URL Configuration | Redirect URLs | `https://yezun.de/konto/`, `http://localhost:5173/konto/`, `https://yezun.de/xox/`, `http://localhost:5173/xox/` |
+
+**Secure password change** bleibt bewusst aus: Ist es an, verlangt GoTrue für jede Passwortänderung aus einer
+Sitzung, die älter als 24 Stunden ist, einen Reauthentifizierungs-Code per E-Mail/SMS. Das bricht das
+Gast-Upgrade (`register()` setzt bei einer meist älteren Gast-Sitzung E-Mail + Passwort per `updateUser`; ein Gast
+hat keine Adresse für den Code) – und die künstlichen `.invalid`-Adressen können ohnehin keinen Code empfangen.
+Die Konto-Seite ändert Passwörter über die Edge Function `password-change` (aktuelles Passwort serverseitig
+geprüft). **Restrisiko:** Ein gestohlenes Access-Token kann das Passwort weiterhin direkt bei GoTrue
+(`PUT /auth/v1/user`) ändern. Ob man das Gast-Upgrade dafür umbaut und die Einstellung anschaltet, ist eine
+eigene, manuelle Entscheidung.
 
 ### Härtung (Pflicht, einmalig)
 
@@ -71,6 +88,9 @@ Entwicklung**. Im gehosteten Projekt musst du sie selbst setzen:
   `select cron.schedule('purge-stale-guests', '17 3 * * *', 'select public.purge_stale_guests()');`
 - `pg_cron` löscht stündlich abgelaufene Konto-Links (Job `purge-expired-konto-tokens`). Fehlt der Job:
   `select cron.schedule('purge-expired-konto-tokens', '41 * * * *', 'delete from public.konto_tokens where expires_at < now()');`
+- Ebenso stündlich: `purge-konto-password-failures` (Fehlversuche älter als 1 Tag) und `purge-konto-mail-log`
+  (Mail-Protokoll älter als 2 Tage). Fehlen sie, die `do $$ … $$`-Blöcke am Ende von
+  `20261110020000_konto_password_change.sql` und `20261110040000_konto_token_limits.sql` im SQL Editor ausführen.
 - `pg_cron` löscht außerdem stündlich Chat-Nachrichten, die älter als 24 Stunden sind (Job `purge-old-chat-messages`).
   Fehlt der Job, genauso im SQL Editor nachholen:
   `select cron.schedule('purge-old-chat-messages', '23 * * * *', $$delete from public.match_messages where created_at < now() - interval '24 hours'$$);`
@@ -147,7 +167,7 @@ npx supabase db push
 ```
 
 Das legt die Tabellen `profiles`, `ratings`, `queue`, `matches`, `match_messages`, `konto_recovery_emails`,
-`konto_tokens`, `handwriting_glyphs`, `handwriting_settings` mit allen Sicherheitsregeln an.
+`konto_tokens`, `konto_password_failures`, `konto_mail_log`, `handwriting_glyphs`, `handwriting_settings` mit allen Sicherheitsregeln an.
 Kontrolle im Dashboard unter **Table Editor**: bei jeder Tabelle steht "RLS enabled".
 
 ## 6. Edge Functions hochladen
@@ -156,9 +176,9 @@ Kontrolle im Dashboard unter **Table Editor**: bei jeder Tabelle steht "RLS enab
 npx supabase functions deploy --project-ref <reference-id>
 ```
 
-Danach sind unter **Edge Functions** vierzehn Funktionen sichtbar:
+Danach sind unter **Edge Functions** fünfzehn Funktionen sichtbar:
 `set-nickname`, `matchmake`, `move`, `resign`, `claim-timeout`, `delete-account`, `bot-game`, `bot-move`, `chat-send`
-(xox) und `recovery-email-set`, `recovery-email-remove`, `recovery-email-verify`, `password-reset-request`,
+(xox) und `recovery-email-set`, `recovery-email-remove`, `password-change`, `recovery-email-verify`, `password-reset-request`,
 `password-reset-confirm` (Konto). Bei den letzten drei steht "Verify JWT" auf **aus** (aus `config.toml`, gewollt:
 sie werden ohne Login aus Mail-Links aufgerufen und prüfen ihr Token selbst).
 

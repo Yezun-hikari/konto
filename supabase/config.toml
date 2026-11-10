@@ -232,6 +232,12 @@ double_confirm_changes = false
 # If enabled, users need to confirm their email address before signing in.
 enable_confirmations = false
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
+# Stays false: GoTrue then demands a reauthentication nonce (OTP mailed to the user's email/phone) for every
+# password update from a session older than 24 h (supabase/auth internal/api/user.go). That would break the guest
+# upgrade in the SDK's register() (updateUser({ email, password }) on an anonymous session, usually older than
+# 24 h, with no address to send a nonce to) and our synthetic addresses can never receive one anyway.
+# Password changes go through the Edge Function password-change (current password verified server-side). The
+# GoTrue endpoint PUT /auth/v1/user itself still accepts a password from any valid access token; see README.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
 max_frequency = "1s"
@@ -459,6 +465,9 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.recovery-email-remove]
+verify_jwt = true
+
+[functions.password-change]
 verify_jwt = true
 
 # Reached from mail links / the login page without a session: no JWT check (they validate the token themselves).

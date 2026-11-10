@@ -77,6 +77,11 @@ export declare function register(username: string, password: string): Promise<Au
 export declare function login(username: string, password: string): Promise<AuthUser>;
 /** Signs out on this device. A later ensureSession() starts a new guest. */
 export declare function logout(): Promise<void>;
+/**
+ * Changes the password of the signed-in (non-guest) user. The current password is verified server-side (Edge
+ * Function password-change, at most 5 wrong attempts per 15 minutes); afterwards all OTHER sessions of the account
+ * are signed out, this one stays signed in.
+ */
 export declare function changePassword(currentPassword: string, newPassword: string): Promise<void>;
 /**
  * Permanently deletes the account and all its data (all sites sharing the project, recovery email included).

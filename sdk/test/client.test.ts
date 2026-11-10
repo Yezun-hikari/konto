@@ -155,11 +155,31 @@ describe('login / register (unchanged xox behaviour)', () => {
     await expect(sdk.register('bob', 'password1')).rejects.toThrow('Du bist bereits angemeldet.');
   });
 
-  it('changePassword re-checks the current password', async () => {
+  it('changePassword goes through the password-change Edge Function', async () => {
     const sdk = await load(registered);
-    fake.auth.signInWithPassword.mockResolvedValueOnce({ data: {}, error: { name: 'AuthApiError', status: 400 } });
-    await expect(sdk.changePassword('wrong', 'password2')).rejects.toThrow('Aktuelles Passwort ist falsch.');
+    await expect(sdk.changePassword('', 'password2')).rejects.toThrow('Aktuelles Passwort ist falsch.');
+    await expect(sdk.changePassword('old', 'short')).rejects.toThrow('Passwort: mindestens 8 Zeichen.');
+    expect(fake.functions.invoke).not.toHaveBeenCalled();
+    await sdk.changePassword('oldpassword', 'password2');
+    expect(fake.functions.invoke).toHaveBeenLastCalledWith('password-change', {
+      body: { password: 'oldpassword', newPassword: 'password2' },
+    });
     expect(fake.auth.updateUser).not.toHaveBeenCalled();
+    expect(fake.auth.signInWithPassword).not.toHaveBeenCalled();
+    fake.functions.invoke.mockResolvedValueOnce({ data: null, error: httpError({ error: 'wrong_password' }, 403) });
+    await expect(sdk.changePassword('wrong', 'password2')).rejects.toThrow('Aktuelles Passwort ist falsch.');
+    fake.functions.invoke.mockResolvedValueOnce({ data: null, error: httpError({ error: 'rate_limited' }, 429) });
+    await expect(sdk.changePassword('wrong', 'password2')).rejects.toThrow('Zu viele Versuche. Bitte später erneut.');
+    fake.functions.invoke.mockResolvedValueOnce({ data: null, error: httpError({ error: 'same_password' }) });
+    await expect(sdk.changePassword('password2', 'password2')).rejects.toThrow('Das neue Passwort muss sich vom alten unterscheiden.');
+    fake.functions.invoke.mockResolvedValueOnce({ data: null, error: httpError({ error: 'internal' }, 500) });
+    await expect(sdk.changePassword('pw', 'password2')).rejects.toThrow('Passwort konnte nicht geändert werden. Bitte erneut versuchen.');
+  });
+
+  it('changePassword requires a registered account', async () => {
+    const sdk = await load(guest);
+    await expect(sdk.changePassword('pw', 'password2')).rejects.toThrow('Nicht angemeldet.');
+    expect(fake.functions.invoke).not.toHaveBeenCalled();
   });
 });
 

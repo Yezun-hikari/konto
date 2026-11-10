@@ -17,6 +17,8 @@ export interface PublicCtx {
 export interface Ctx {
   userId: string;
   user: User;
+  /** The caller's access token (already verified with auth.getUser). */
+  token: string;
   body: Record<string, unknown>;
   db: SupabaseClient; // service role: bypasses RLS, never expose its results unfiltered
 }
@@ -54,7 +56,7 @@ export function servePublic(handler: (ctx: PublicCtx) => Promise<unknown>): void
 
 function serveInternal(
   authenticated: boolean,
-  run: (auth: { userId: string; user: User }, body: Record<string, unknown>) => Promise<unknown>,
+  run: (auth: { userId: string; user: User; token: string }, body: Record<string, unknown>) => Promise<unknown>,
 ): void {
   Deno.serve(async (req) => {
     const cors = corsHeaders(req.headers.get('origin'));
@@ -65,13 +67,13 @@ function serveInternal(
     if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
 
     try {
-      let auth = { userId: '', user: undefined as unknown as User };
+      let auth = { userId: '', user: undefined as unknown as User, token: '' };
       if (authenticated) {
         const token = req.headers.get('authorization')?.match(/^Bearer (.+)$/i)?.[1];
         if (!token) throw new HttpError(401, 'unauthorized');
         const { data, error } = await db.auth.getUser(token);
         if (error || !data.user) throw new HttpError(401, 'unauthorized');
-        auth = { userId: data.user.id, user: data.user };
+        auth = { userId: data.user.id, user: data.user, token };
       }
 
       const text = await req.text();

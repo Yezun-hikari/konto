@@ -34,6 +34,8 @@ verifyRecoveryEmail(token: string): Promise<void>
 ## Edge Functions (neu, verify_jwt wie angegeben)
 - `recovery-email-set`      (jwt) body {password, email}  → prüft Passwort serverseitig, speichert pending, mailt Link
 - `recovery-email-remove`   (jwt) body {password}
+- `password-change`         (jwt) body {password (aktuell), newPassword} → prüft Passwort serverseitig (max. 5 Fehlversuche/15 min/Konto),
+                            admin.updateUserById, beendet alle ANDEREN Sitzungen (eigene `session_id` aus dem JWT bleibt)
 - `recovery-email-verify`   (no jwt) body {token}
 - `password-reset-request`  (no jwt) body {username} → nur wenn verifizierte Recovery-Mail; immer 200 + gleiche Antwort; Rate-Limit
 - `password-reset-confirm`  (no jwt) body {token, password} → admin.updateUserById, Token einmalig, 1h gültig
@@ -46,8 +48,9 @@ sondern in einer eigenen Tabelle ohne Client-Zugriff.
 ## Tabellen (neu)
 - `konto_recovery_emails`  (user_id pk → auth.users on delete cascade, email, verified_at, created_at) – kein Client-Grant
 - `konto_tokens`           (token_hash pk, user_id, kind 'verify_email'|'reset_password', email, expires_at, used_at)
-- `handwriting_glyphs`     (user_id → auth.users cascade, char text 1..8 Zeichen, variant smallint 0..9,
-                            strokes jsonb (Größe begrenzen), advance real, updated_at; pk(user_id,char,variant))
+- `handwriting_glyphs`     (user_id → auth.users cascade, char text 1..4 Zeichen, variant smallint 0..2,
+                            strokes jsonb (Größe begrenzen), advance real, updated_at; pk(user_id,char,variant));
+                            höchstens 500 Zeilen pro Nutzer (Trigger `handwriting_glyphs_quota`)
                             RLS: eigene Zeilen select/insert/update/delete, nur NICHT-anonyme Nutzer
                             (`coalesce((auth.jwt()->>'is_anonymous')::boolean,false) = false`), grants für authenticated.
 - `handwriting_settings`   (user_id pk cascade, settings jsonb, updated_at) – gleiche RLS

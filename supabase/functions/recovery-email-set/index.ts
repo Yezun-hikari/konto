@@ -14,7 +14,7 @@ serve(async ({ userId, user, body, db }) => {
   const email = normalizeEmail(body.email);
   if (!email) throw new HttpError(400, 'invalid_email', 'Bitte eine gültige E-Mail-Adresse angeben.');
   requireMailConfig();
-  await verifyPassword(user, body.password);
+  await verifyPassword(user, body.password, db);
 
   const { token, hash } = await newToken();
   const stored = check(

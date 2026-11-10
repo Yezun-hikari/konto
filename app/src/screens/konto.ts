@@ -153,8 +153,8 @@ function passwordCard(): HTMLElement {
       if (f.p !== f.p2) throw new AuthFailure('Die Passwörter stimmen nicht überein.');
       await changePassword(f.old, f.p);
       formEl.reset();
-      announce('Passwort geändert.');
-      return 'Passwort geändert.';
+      announce('Passwort geändert. Andere Geräte wurden abgemeldet.');
+      return 'Passwort geändert. Andere Geräte wurden abgemeldet.';
     }),
   );
 }

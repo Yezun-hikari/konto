@@ -27,7 +27,7 @@ onAuthChange((u) => ...);         // sofort + bei jedem An-/Abmelden; gibt unsub
 await register('name', 'pw');     // Gast wird in-place aufgewertet (gleiche user id), danach refreshSession()
 await login('name', 'pw');        // wechselt das Konto; der vorherige Gast wird gelöscht
 await logout();                   // nur dieses Gerät
-await changePassword('alt', 'neu');
+await changePassword('alt', 'neu'); // serverseitig geprüft; meldet alle anderen Geräte ab
 await deleteAccount('pw');        // Passwort für registrierte Konten, keins für Gäste
 getClient().from('…');            // der gemeinsame supabase-js-Client
 
@@ -79,8 +79,12 @@ Ein zweiter Aufruf mit anderen Werten nach der ersten Nutzung wirft.
 - **Gemeinsamer `localStorage`:** Alle Seiten auf yezun.de teilen den Origin und damit das Sitzungs-Token.
   Eine XSS-Lücke in irgendeiner Seite gefährdet alle Konten. Nutzerdaten nie in `innerHTML` – nur
   `textContent` / `createElement`.
-- `changePassword()` prüft das alte Passwort nur clientseitig (Supabase-Grenze, wie in xox). Kontolöschen,
-  Recovery-E-Mail setzen/entfernen prüfen das Passwort serverseitig.
+- Passwort ändern (`changePassword()`, Edge Function `password-change`), Kontolöschen und Recovery-E-Mail
+  setzen/entfernen prüfen das aktuelle Passwort **serverseitig** (höchstens 5 Fehlversuche pro Konto in 15 Minuten).
+  Nach einer Passwortänderung werden alle anderen Sitzungen beendet.
+- Grenze: Solange im Dashboard "Secure password change" aus ist (nötig für das Gast-Upgrade, siehe
+  `supabase/README.md`), kann ein gestohlenes Access-Token das Passwort trotzdem direkt bei GoTrue
+  (`PUT /auth/v1/user`) ändern. Die serverseitige Prüfung schützt nur die Wege über die Edge Functions.
 
 ## Zwei Sitzungen lokal testen
 
