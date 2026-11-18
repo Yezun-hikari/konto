@@ -6,7 +6,7 @@ import { applyMove, legalMoves, LINES, WIN_SCORE, type GameState, type Player } 
 export const BOT_ELO_MIN = 100;
 export const BOT_ELO_MAX = 1400;
 
-const NAMES = ['Robo-Rudi', 'Pixel-Pia', 'Bit-Ben', 'Byte-Bea', 'Turbo-Tim', 'Nano-Nora', 'Gizmo-Gus', 'Chip-Chantal'];
+const NAMES = ['Xaver', 'Oskar', 'Kreuzkönig', 'Kringel', 'Quer-Kalle', 'Ringo', 'Diagonal-Dora', 'Zickzack-Zoe'];
 
 export const botName = (rng: () => number = Math.random): string => `${NAMES[Math.floor(rng() * NAMES.length)]} (Bot)`;
 
@@ -26,6 +26,15 @@ export const NEUTRAL_STYLE: Style = { attack: 1, defence: 1 };
 
 /** Own-line weight per bot name; the opponent-line weight is 2 minus this. */
 const ATTACK: Record<string, number> = {
+  Xaver: 1.1,
+  Oskar: 0.9,
+  Kreuzkönig: 1.15,
+  Kringel: 0.85,
+  'Quer-Kalle': 1.05,
+  Ringo: 0.95,
+  'Diagonal-Dora': 1.08,
+  'Zickzack-Zoe': 0.92,
+  // former names: only so bot matches started before the rename keep their style
   'Robo-Rudi': 1.1,
   'Pixel-Pia': 0.9,
   'Bit-Ben': 1.05,
