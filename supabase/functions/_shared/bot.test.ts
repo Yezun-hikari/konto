@@ -123,8 +123,8 @@ describe('bot', () => {
   });
 
   it('styles are fixed per name, neutral for unknown names', () => {
-    expect(styleOf('Turbo-Tim (Bot)')).toEqual(styleOf('Turbo-Tim'));
-    expect(styleOf('Turbo-Tim (Bot)').attack).toBeGreaterThan(styleOf('Nano-Nora (Bot)').attack);
+    expect(styleOf('Kreuzkönig (Bot)')).toEqual(styleOf('Kreuzkönig'));
+    expect(styleOf('Kreuzkönig (Bot)').attack).toBeGreaterThan(styleOf('Kringel (Bot)').attack);
     expect(styleOf('Somebody')).toEqual(NEUTRAL_STYLE);
   });
 
@@ -140,11 +140,11 @@ describe('bot', () => {
       }
       return n;
     };
-    expect(spoils(styleOf('Nano-Nora'))).toBeGreaterThan(spoils(styleOf('Turbo-Tim')));
+    expect(spoils(styleOf('Kringel'))).toBeGreaterThan(spoils(styleOf('Kreuzkönig')));
   });
 
   it('style does not change strength much at the same Elo', { timeout: 60_000 }, () => {
-    const a = wins(600, 600, 100, styleOf('Turbo-Tim'), styleOf('Nano-Nora'));
+    const a = wins(600, 600, 100, styleOf('Kreuzkönig'), styleOf('Kringel'));
     expect(a).toBeGreaterThan(30);
     expect(a).toBeLessThan(70);
   });
